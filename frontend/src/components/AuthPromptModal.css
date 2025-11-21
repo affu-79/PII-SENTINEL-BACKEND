@@ -1,0 +1,363 @@
+/* Auth Modal Styles */
+
+/* Backdrop with Blur */
+.auth-modal-backdrop {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 9997;
+  animation: fadeInBackdrop 0.3s ease-in-out;
+}
+
+/* Modal Overlay Container */
+.auth-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9998;
+  padding: 20px;
+}
+
+/* Modal Content */
+.auth-modal-content {
+  background: white;
+  border-radius: 24px;
+  padding: 50px 40px;
+  max-width: 500px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  position: relative;
+  animation: slideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* Close Button */
+.auth-modal-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: #7f8c8d;
+  padding: 8px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.auth-modal-close:hover {
+  background: #f0f2f5;
+  color: #2c3e50;
+  transform: rotate(90deg);
+}
+
+/* Icon */
+.auth-modal-icon {
+  text-align: center;
+  margin-bottom: 24px;
+  animation: popIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+}
+
+.auth-modal-icon svg {
+  color: #667eea;
+  filter: drop-shadow(0 4px 12px rgba(102, 126, 234, 0.15));
+}
+
+/* Title */
+.auth-modal-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: #2c3e50;
+  margin: 0 0 16px 0;
+  text-align: center;
+  animation: slideInDown 0.4s ease-out 0.15s both;
+}
+
+/* Message */
+.auth-modal-message {
+  font-size: 16px;
+  color: #5a6c7d;
+  text-align: center;
+  margin: 0 0 30px 0;
+  line-height: 1.6;
+  animation: slideInDown 0.4s ease-out 0.2s both;
+}
+
+/* Feature Highlights */
+.auth-modal-features {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 32px;
+  animation: slideInUp 0.4s ease-out 0.25s both;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #f0f4f8 100%);
+  border-radius: 12px;
+  border: 1px solid #e5e9f0;
+  transition: all 0.3s ease;
+}
+
+.feature-item:hover {
+  background: linear-gradient(135deg, #f0f4f8 0%, #e8ecf3 100%);
+  border-color: #d0d8e3;
+  transform: translateX(4px);
+}
+
+.feature-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: white;
+  border-radius: 8px;
+  color: #667eea;
+  flex-shrink: 0;
+}
+
+.feature-item span {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2c3e50;
+}
+
+/* Buttons Container */
+.auth-modal-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+  animation: slideInUp 0.4s ease-out 0.3s both;
+}
+
+/* Modal Button */
+.auth-modal-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border: 2px solid;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Create Account Button */
+.btn-create-account {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-color: #667eea;
+  color: white;
+  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.25);
+}
+
+.btn-create-account:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(102, 126, 234, 0.35);
+}
+
+.btn-create-account:active {
+  transform: translateY(0);
+}
+
+/* Sign In Button */
+.btn-sign-in {
+  background: white;
+  border-color: #667eea;
+  color: #667eea;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+}
+
+.btn-sign-in:hover {
+  background: #f8fafc;
+  border-color: #764ba2;
+  color: #764ba2;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.15);
+}
+
+.btn-sign-in:active {
+  transform: translateY(0);
+}
+
+/* Button SVG */
+.auth-modal-btn svg {
+  transition: transform 0.3s ease;
+}
+
+.auth-modal-btn:hover svg {
+  transform: scale(1.1);
+}
+
+/* Footer */
+.auth-modal-footer {
+  font-size: 13px;
+  color: #95a5a6;
+  text-align: center;
+  margin: 0;
+  animation: fadeIn 0.4s ease-out 0.4s both;
+}
+
+/* Animations */
+@keyframes fadeInBackdrop {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(15px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes popIn {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .auth-modal-content {
+    padding: 40px 30px;
+    max-width: 90%;
+  }
+
+  .auth-modal-title {
+    font-size: 22px;
+  }
+
+  .auth-modal-message {
+    font-size: 15px;
+  }
+
+  .auth-modal-buttons {
+    gap: 10px;
+  }
+
+  .auth-modal-btn {
+    padding: 12px 20px;
+    font-size: 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .auth-modal-content {
+    padding: 30px 20px;
+    border-radius: 16px;
+  }
+
+  .auth-modal-close {
+    top: 16px;
+    right: 16px;
+  }
+
+  .auth-modal-icon svg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .auth-modal-title {
+    font-size: 20px;
+    margin-bottom: 12px;
+  }
+
+  .auth-modal-message {
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+
+  .auth-modal-features {
+    gap: 10px;
+    margin-bottom: 24px;
+  }
+
+  .feature-item {
+    padding: 10px 12px;
+    font-size: 13px;
+  }
+
+  .feature-icon {
+    width: 28px;
+    height: 28px;
+  }
+
+  .auth-modal-btn {
+    padding: 12px 16px;
+    font-size: 13px;
+    gap: 8px;
+  }
+
+  .auth-modal-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+}
+

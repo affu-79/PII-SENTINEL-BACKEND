@@ -1,0 +1,267 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+/* Main container */
+.analysis-header-enterprise {
+  width: 100%;
+  padding: 32px 24px;
+  background: linear-gradient(135deg, #f7fafc 0%, #edf2f7 100%);
+  border-radius: 0;
+  margin-bottom: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* Section title */
+.header-section-title {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.header-section-title h2 {
+  font-size: 26px;
+  font-weight: 800;
+  color: #1a202c;
+  margin: 0;
+  line-height: 1.2;
+  letter-spacing: -0.5px;
+}
+
+.header-section-title p {
+  font-size: 13px;
+  color: #718096;
+  margin: 0;
+  font-weight: 500;
+}
+
+.batch-name-label {
+  font-weight: 600;
+  color: #a0aec0;
+}
+
+/* Form container */
+.header-form-container {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(226, 232, 240, 0.6);
+  border-radius: 20px;
+  padding: 28px 32px;
+  box-sizing: border-box;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+}
+
+/* Info grid - 3 columns desktop */
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 28px;
+  width: 100%;
+}
+
+/* Individual info field */
+.info-field {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  transition: all 0.3s ease;
+}
+
+.info-field:hover {
+  transform: translateY(-1px);
+}
+
+/* Field icon */
+.field-icon {
+  font-size: 20px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.info-field:hover .field-icon {
+  transform: scale(1.08);
+}
+
+/* Field content */
+.field-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+
+/* Field label */
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8a8fa3;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0;
+  line-height: 1.2;
+}
+
+/* Field value */
+.field-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a202c;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+/* Risk badge styling */
+.field-value.risk-badge {
+  display: inline-block;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid;
+  font-size: 14px;
+  font-weight: 600;
+  width: fit-content;
+}
+
+/* Date value styling */
+.field-value.date-value {
+  font-size: 13px;
+  color: #718096;
+  font-weight: 500;
+}
+
+/* Loading state */
+.header-loading {
+  padding: 40px 24px;
+  text-align: center;
+  color: #718096;
+  font-size: 14px;
+  width: 100%;
+}
+
+/* ===== TABLET RESPONSIVENESS (768px - 1024px) ===== */
+@media (max-width: 1024px) {
+  .analysis-header-enterprise {
+    padding: 28px 20px;
+    gap: 20px;
+  }
+
+  .header-section-title h2 {
+    font-size: 22px;
+  }
+
+  .header-form-container {
+    padding: 24px 28px;
+  }
+
+  /* 2 columns on tablet */
+  .info-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+
+  .field-icon {
+    width: 36px;
+    height: 36px;
+    font-size: 18px;
+  }
+
+  .field-label {
+    font-size: 11px;
+  }
+
+  .field-value {
+    font-size: 15px;
+  }
+}
+
+/* ===== MOBILE RESPONSIVENESS (max 768px) ===== */
+@media (max-width: 768px) {
+  .analysis-header-enterprise {
+    padding: 20px 16px;
+    gap: 16px;
+  }
+
+  .header-section-title h2 {
+    font-size: 20px;
+  }
+
+  .header-section-title p {
+    font-size: 12px;
+  }
+
+  .header-form-container {
+    padding: 20px 24px;
+  }
+
+  /* 1 column on mobile */
+  .info-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+
+  .field-icon {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+
+  .field-label {
+    font-size: 10px;
+  }
+
+  .field-value {
+    font-size: 14px;
+  }
+
+  .field-value.risk-badge {
+    font-size: 13px;
+    padding: 5px 10px;
+  }
+}
+
+/* ===== SMALL MOBILE (max 480px) ===== */
+@media (max-width: 480px) {
+  .analysis-header-enterprise {
+    padding: 16px 12px;
+    gap: 12px;
+  }
+
+  .header-section-title h2 {
+    font-size: 18px;
+  }
+
+  .header-form-container {
+    padding: 16px 20px;
+  }
+
+  .info-grid {
+    gap: 16px;
+  }
+
+  .field-icon {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+
+  .field-label {
+    font-size: 9px;
+  }
+
+  .field-value {
+    font-size: 13px;
+  }
+
+  .field-value.risk-badge {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+}
+

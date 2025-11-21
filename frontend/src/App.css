@@ -1,0 +1,22 @@
+/* App.css - Global reset to prevent right-side black space */
+
+.App {
+  width: 100vw;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+/* Ensure no default React styles interfere */
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100vw;
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden;
+}

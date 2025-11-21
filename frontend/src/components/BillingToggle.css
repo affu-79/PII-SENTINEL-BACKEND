@@ -1,0 +1,384 @@
+/* Billing Toggle Component Styles */
+
+/* CSS Variables for Theme Consistency */
+:root {
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --primary-gradient-reverse: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+    --primary-purple: #667eea;
+    --primary-purple-dark: #764ba2;
+    --text-primary: #1a202c;
+    --text-secondary: #4a5568;
+    --text-muted: #718096;
+    --bg-light: #f7fafc;
+    --bg-white: #ffffff;
+    --border-color: #e2e8f0;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 4px 16px rgba(102, 126, 234, 0.15);
+    --shadow-lg: 0 8px 24px rgba(102, 126, 234, 0.2);
+    --shadow-glow: 0 0 20px rgba(102, 126, 234, 0.4);
+}
+
+/* Main Wrapper */
+.billing-toggle-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 40px 24px;
+    margin: 0 auto;
+    max-width: 600px;
+    animation: fadeInUp 0.6s ease 0.3s both;
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Desktop & Tablet: Toggle Container */
+.billing-toggle-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    background: var(--bg-white);
+    padding: 12px 20px;
+    border-radius: 50px;
+    box-shadow: var(--shadow-md);
+    border: 2px solid var(--border-color);
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.billing-toggle-container:hover {
+    box-shadow: var(--shadow-lg);
+    border-color: rgba(102, 126, 234, 0.3);
+}
+
+/* Toggle Labels */
+.toggle-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 8px 16px;
+    border-radius: 12px;
+    transition: all 0.25s ease-in-out;
+    position: relative;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.toggle-label:hover {
+    background: rgba(102, 126, 234, 0.05);
+}
+
+.toggle-label.active {
+    transform: scale(1.05);
+}
+
+.label-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-muted);
+    transition: all 0.25s ease-in-out;
+    position: relative;
+}
+
+.toggle-label.active .label-text {
+    color: var(--text-primary);
+    font-weight: 700;
+    background: var(--primary-gradient);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.toggle-label.active .label-text::after {
+    content: '';
+    position: absolute;
+    bottom: -4px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--primary-gradient);
+    border-radius: 2px;
+    animation: underlineExpand 0.3s ease-out;
+}
+
+@keyframes underlineExpand {
+    from {
+        transform: scaleX(0);
+    }
+    to {
+        transform: scaleX(1);
+    }
+}
+
+/* Save Badge (Desktop/Tablet) */
+.save-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    background: var(--primary-gradient);
+    color: white;
+    font-size: 11px;
+    font-weight: 700;
+    border-radius: 12px;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+    animation: badgeSlideIn 0.4s ease-out;
+    margin-top: 4px;
+}
+
+@keyframes badgeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-8px) scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Toggle Switch Wrapper */
+.toggle-switch-wrapper {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toggle-switch {
+    position: relative;
+    width: 64px;
+    height: 36px;
+    background: var(--bg-light);
+    border: 2px solid var(--border-color);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.25s ease-in-out;
+    padding: 0;
+    outline: none;
+    overflow: hidden;
+}
+
+.toggle-switch:hover {
+    border-color: var(--primary-purple);
+    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+}
+
+.toggle-switch:focus {
+    box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.2);
+}
+
+.toggle-slider {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: var(--bg-light);
+    border-radius: 20px;
+    transition: all 0.25s ease-in-out;
+    display: flex;
+    align-items: center;
+    padding: 3px;
+}
+
+.toggle-slider.yearly {
+    background: var(--primary-gradient);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1), var(--shadow-glow);
+}
+
+.toggle-knob {
+    width: 28px;
+    height: 28px;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    transform: translateX(0);
+    position: relative;
+}
+
+.toggle-slider.yearly .toggle-knob {
+    transform: translateX(28px);
+}
+
+.toggle-knob::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 12px;
+    height: 12px;
+    background: var(--primary-gradient);
+    border-radius: 50%;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.toggle-slider.yearly .toggle-knob::before {
+    opacity: 0.2;
+}
+
+/* Pulse animation on toggle */
+.toggle-switch:active .toggle-knob {
+    transform: scale(0.95);
+}
+
+.toggle-slider.yearly:active .toggle-knob {
+    transform: translateX(28px) scale(0.95);
+}
+
+/* Tablet Adjustments */
+@media (min-width: 768px) and (max-width: 1024px) {
+    .billing-toggle-wrapper {
+        padding: 32px 20px;
+    }
+
+    .billing-toggle-container {
+        gap: 20px;
+        padding: 10px 16px;
+    }
+
+    .toggle-label {
+        padding: 6px 12px;
+    }
+
+    .label-text {
+        font-size: 15px;
+    }
+
+    .toggle-switch {
+        width: 56px;
+        height: 32px;
+    }
+
+    .toggle-knob {
+        width: 24px;
+        height: 24px;
+    }
+
+    .toggle-slider.yearly .toggle-knob {
+        transform: translateX(24px);
+    }
+
+    .save-badge {
+        font-size: 10px;
+        padding: 3px 8px;
+    }
+}
+
+/* Mobile: Two-Button Segment Control */
+.billing-toggle-wrapper.mobile-toggle {
+    padding: 32px 20px;
+    max-width: 100%;
+}
+
+.billing-toggle-mobile {
+    display: flex;
+    width: 100%;
+    max-width: 320px;
+    background: var(--bg-white);
+    border-radius: 16px;
+    padding: 6px;
+    box-shadow: var(--shadow-md);
+    border: 2px solid var(--border-color);
+    position: relative;
+    gap: 6px;
+}
+
+.toggle-option-mobile {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 14px 16px;
+    background: transparent;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.25s ease-in-out;
+    position: relative;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    min-height: 56px;
+}
+
+.toggle-option-mobile:active {
+    transform: scale(0.98);
+}
+
+.toggle-option-mobile.active {
+    background: var(--primary-gradient);
+    box-shadow: var(--shadow-md);
+    transform: scale(1.02);
+}
+
+.toggle-option-text {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    transition: all 0.25s ease-in-out;
+}
+
+.toggle-option-mobile.active .toggle-option-text {
+    color: white;
+    font-weight: 700;
+}
+
+.save-badge-mobile {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.25);
+    backdrop-filter: blur(10px);
+    color: white;
+    font-size: 10px;
+    font-weight: 700;
+    border-radius: 10px;
+    white-space: nowrap;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    animation: badgeSlideIn 0.4s ease-out;
+    margin-top: 2px;
+}
+
+/* Glow pulse animation for yearly state */
+@keyframes glowPulse {
+    0%, 100% {
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1), 0 0 0 0 rgba(102, 126, 234, 0.4);
+    }
+    50% {
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1), 0 0 0 6px rgba(102, 126, 234, 0.2);
+    }
+}
+
+.toggle-slider.yearly {
+    animation: glowPulse 2s ease-in-out infinite;
+}
+
+/* Accessibility */
+.toggle-switch:focus-visible,
+.toggle-label:focus-visible,
+.toggle-option-mobile:focus-visible {
+    outline: 2px solid var(--primary-purple);
+    outline-offset: 2px;
+}
+
+/* Smooth transitions for all interactive elements */
+* {
+    -webkit-tap-highlight-color: transparent;
+}
+
