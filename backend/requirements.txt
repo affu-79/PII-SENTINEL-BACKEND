@@ -31,7 +31,7 @@ requests>=2.31.0
 matplotlib==3.9.0
 
 # Image OCR + PII Masking Pipeline
-paddleocr>=2.7.0
+# paddleocr>=2.7.0  # Commented out - too heavy for Render, uses EasyOCR + Tesseract instead
 cairosvg>=2.7.0
 
 # Production Server
