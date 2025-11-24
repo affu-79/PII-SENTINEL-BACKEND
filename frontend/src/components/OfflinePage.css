@@ -1,0 +1,427 @@
+/* Offline Page Styles */
+.offline-page {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    position: relative;
+    overflow: hidden;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.offline-container {
+    max-width: 600px;
+    padding: 40px;
+    text-align: center;
+    position: relative;
+    z-index: 1;
+}
+
+/* Animated WiFi Icon */
+.offline-icon-wrapper {
+    margin-bottom: 40px;
+    perspective: 1000px;
+}
+
+.offline-icon {
+    position: relative;
+    display: inline-block;
+    width: 150px;
+    height: 150px;
+    animation: float 3s ease-in-out infinite;
+}
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px) rotate(0deg); }
+    50% { transform: translateY(-20px) rotate(5deg); }
+}
+
+.wifi-symbol {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.wifi-arc {
+    position: absolute;
+    border: 4px solid rgba(255, 255, 255, 0.8);
+    border-radius: 50%;
+    border-left-color: transparent;
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    animation: fadeArc 1.5s ease-in-out infinite;
+}
+
+.wifi-arc-1 {
+    width: 40px;
+    height: 40px;
+    animation-delay: 0s;
+}
+
+.wifi-arc-2 {
+    width: 70px;
+    height: 70px;
+    animation-delay: 0.2s;
+}
+
+.wifi-arc-3 {
+    width: 100px;
+    height: 100px;
+    animation-delay: 0.4s;
+}
+
+.wifi-dot {
+    width: 15px;
+    height: 15px;
+    background: rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes fadeArc {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+}
+
+@keyframes pulse {
+    0%, 100% { transform: translateX(-50%) scale(1); opacity: 1; }
+    50% { transform: translateX(-50%) scale(1.3); opacity: 0.7; }
+}
+
+.disconnect-slash {
+    position: absolute;
+    width: 120px;
+    height: 4px;
+    background: #ff6b6b;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-45deg);
+    box-shadow: 0 0 20px rgba(255, 107, 107, 0.5);
+    animation: slashGlow 2s ease-in-out infinite;
+}
+
+@keyframes slashGlow {
+    0%, 100% { box-shadow: 0 0 20px rgba(255, 107, 107, 0.5); }
+    50% { box-shadow: 0 0 30px rgba(255, 107, 107, 0.9); }
+}
+
+/* Content */
+.offline-content {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 24px;
+    padding: 50px 40px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.6s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.offline-title {
+    font-size: 56px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin: 0 0 10px 0;
+    animation: titlePop 0.6s ease-out 0.2s both;
+}
+
+@keyframes titlePop {
+    0% { transform: scale(0.8); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.offline-subtitle {
+    font-size: 28px;
+    font-weight: 600;
+    color: #2d3748;
+    margin: 0 0 20px 0;
+    animation: titlePop 0.6s ease-out 0.3s both;
+}
+
+.offline-message {
+    font-size: 16px;
+    color: #4a5568;
+    line-height: 1.6;
+    margin: 0 0 30px 0;
+    animation: titlePop 0.6s ease-out 0.4s both;
+}
+
+/* Error Box */
+.offline-error-box {
+    background: linear-gradient(135deg, #fff5f5 0%, #fed7d7 100%);
+    border: 2px solid #fc8181;
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 30px 0;
+    animation: titlePop 0.6s ease-out 0.5s both;
+}
+
+.error-icon {
+    font-size: 28px;
+    animation: shake 0.5s ease-in-out infinite;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.error-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    text-align: left;
+    flex: 1;
+}
+
+.error-text strong {
+    color: #c53030;
+    font-weight: 600;
+    font-size: 16px;
+    display: block;
+    margin-bottom: 4px;
+}
+
+.error-text span {
+    color: #742a2a;
+    font-size: 14px;
+}
+
+/* Action Buttons */
+.offline-actions {
+    display: flex;
+    gap: 15px;
+    justify-content: center;
+    margin: 30px 0;
+    animation: titlePop 0.6s ease-out 0.6s both;
+}
+
+.btn-retry,
+.btn-home {
+    padding: 14px 32px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.btn-retry {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.btn-retry:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.btn-retry:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+.btn-retry:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.btn-home {
+    background: white;
+    color: #667eea;
+    border: 2px solid #667eea;
+}
+
+.btn-home:hover {
+    background: #667eea;
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+.retry-icon {
+    font-size: 20px;
+    display: inline-block;
+}
+
+.btn-retry:hover:not(:disabled) .retry-icon {
+    animation: spin 0.6s ease-in-out;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.retry-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+    border-radius: 50%;
+    display: inline-block;
+    animation: spinner 0.8s linear infinite;
+}
+
+@keyframes spinner {
+    to { transform: rotate(360deg); }
+}
+
+.home-icon {
+    font-size: 18px;
+}
+
+/* Tips Section */
+.offline-tips {
+    margin-top: 40px;
+    padding-top: 30px;
+    border-top: 2px dashed #e2e8f0;
+    text-align: left;
+    animation: titlePop 0.6s ease-out 0.7s both;
+}
+
+.offline-tips h3 {
+    font-size: 18px;
+    font-weight: 600;
+    color: #2d3748;
+    margin: 0 0 15px 0;
+}
+
+.offline-tips ul {
+    margin: 0;
+    padding-left: 24px;
+    color: #4a5568;
+}
+
+.offline-tips li {
+    margin-bottom: 10px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+/* Floating Particles */
+.offline-particles {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.particle {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    animation: particleFloat 6s ease-in-out infinite;
+}
+
+.particle-1 {
+    width: 60px;
+    height: 60px;
+    top: 10%;
+    left: 10%;
+    animation-delay: 0s;
+}
+
+.particle-2 {
+    width: 40px;
+    height: 40px;
+    top: 60%;
+    left: 80%;
+    animation-delay: 1s;
+}
+
+.particle-3 {
+    width: 80px;
+    height: 80px;
+    top: 80%;
+    left: 20%;
+    animation-delay: 2s;
+}
+
+.particle-4 {
+    width: 50px;
+    height: 50px;
+    top: 20%;
+    right: 10%;
+    animation-delay: 3s;
+}
+
+.particle-5 {
+    width: 70px;
+    height: 70px;
+    bottom: 10%;
+    right: 30%;
+    animation-delay: 4s;
+}
+
+@keyframes particleFloat {
+    0%, 100% {
+        transform: translateY(0) rotate(0deg);
+        opacity: 0.3;
+    }
+    50% {
+        transform: translateY(-30px) rotate(180deg);
+        opacity: 0.6;
+    }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+    .offline-container {
+        padding: 20px;
+    }
+
+    .offline-content {
+        padding: 40px 24px;
+    }
+
+    .offline-title {
+        font-size: 42px;
+    }
+
+    .offline-subtitle {
+        font-size: 22px;
+    }
+
+    .offline-actions {
+        flex-direction: column;
+    }
+
+    .btn-retry,
+    .btn-home {
+        width: 100%;
+        justify-content: center;
+    }
+}
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createBatch, deleteBatch } from '../api';
 import { FiPlus, FiTrash2, FiX, FiCheck } from 'react-icons/fi';
@@ -6,7 +6,34 @@ import AuthPromptModal from './AuthPromptModal';
 import BatchLoader from './BatchLoader';
 import './Sidebar.css';
 
-function Sidebar({ batches, selectedBatch, onBatchSelect, onBatchCreated, isOpen = false, onClose, loadingBatches = false }) {
+const normalizeCount = (value) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const match = value.match(/-?\d+(\.\d+)?/);
+    if (!match) {
+      return null;
+    }
+    const parsed = Number(match[0]);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+};
+
+function Sidebar({
+  batches,
+  selectedBatch,
+  onBatchSelect,
+  onBatchCreated,
+  isOpen = false,
+  onClose,
+  loadingBatches = false,
+  currentAnalysis = null
+}) {
   console.log("Sidebar - Batches received:", batches);
   console.log("Sidebar - loadingBatches received:", loadingBatches);
   const navigate = useNavigate();
@@ -143,25 +170,35 @@ function Sidebar({ batches, selectedBatch, onBatchSelect, onBatchCreated, isOpen
     console.log(`🗑️ Deleting batch: ${batchId}`);
     
     try {
+      // Deselect if deleted batch is currently selected BEFORE deletion
+      const wasSelected = selectedBatch === batchId;
+      if (wasSelected) {
+        console.log('📌 Deselecting batch before deletion');
+        onBatchSelect(null);
+      }
+      
       const response = await deleteBatch(batchId);
       console.log('✓ Batch deleted response:', response);
       
       setShowDeleteConfirm(null);
       
-      // Deselect if deleted batch was selected FIRST
-      if (selectedBatch === batchId) {
-        console.log('📌 Deselecting deleted batch');
-        onBatchSelect(null);
-      }
-      
       // Refresh the batch list from server (clears cache)
       console.log('🔄 Refreshing batch list');
-      onBatchCreated();
+      await onBatchCreated();
       
       // Show success (no alert - just log)
       console.log('✅ Batch deleted successfully');
     } catch (error) {
       console.error('❌ Error deleting batch:', error);
+      
+      // If batch was already deleted (404), treat as success
+      if (error.response?.status === 404) {
+        console.log('⚠️ Batch already deleted - treating as success');
+        setShowDeleteConfirm(null);
+        await onBatchCreated();
+        return;
+      }
+      
       const errorMsg = error.response?.data?.error || error.message || 'Unknown error';
       console.error('Error details:', errorMsg);
       alert('Failed to delete batch: ' + errorMsg);
@@ -284,85 +321,138 @@ function Sidebar({ batches, selectedBatch, onBatchSelect, onBatchCreated, isOpen
         ) : (
           <div className="batches-container" ref={containerRef} onScroll={handleScroll}>
             {/* Lazy load only visible batches for performance */}
-            {batches.slice(visibleRange.start, visibleRange.end).map((batch, idx) => (
-              <div
-                key={batch.batch_id}
-                className={`batch-item-modern ${selectedBatch === batch.batch_id ? 'selected' : ''}`}
-              >
+            {batches.slice(visibleRange.start, visibleRange.end).map((batch, idx) => {
+              const processedAt = batch.processed_at || batch.updated_at || batch.created_at;
+              const isSelectedBatch = selectedBatch === batch.batch_id;
+              const analysisOverride = isSelectedBatch && currentAnalysis ? currentAnalysis : null;
+              const analysisFiles = Array.isArray(analysisOverride?.files) ? analysisOverride.files : null;
+              const analysisFileCount = analysisFiles ? analysisFiles.length : null;
+              const analysisPagesProcessed =
+                normalizeCount(analysisOverride?.summary?.pages_processed) ??
+                (analysisFiles
+                  ? analysisFiles.reduce(
+                      (sum, file) => sum + (normalizeCount(file?.page_count) ?? 0),
+                      0
+                    )
+                  : null);
+              const analysisPiis =
+                normalizeCount(analysisOverride?.stats?.piis) ??
+                (analysisFiles
+                  ? analysisFiles.reduce((sum, file) => {
+                      if (Array.isArray(file?.piis)) {
+                        return sum + file.piis.length;
+                      }
+                      return sum + (normalizeCount(file?.pii_count) ?? 0);
+                    }, 0)
+                  : null);
+              const totalFiles =
+                analysisFileCount ??
+                normalizeCount(batch.summary?.files_processed) ??
+                (Array.isArray(batch.files) ? batch.files.length : null) ??
+                normalizeCount(batch.file_count) ??
+                normalizeCount(batch.stats?.files_processed) ??
+                normalizeCount(batch.stats?.files) ??
+                0;
+              const pagesProcessed =
+                analysisPagesProcessed ??
+                normalizeCount(batch.summary?.pages_processed) ??
+                normalizeCount(batch.stats?.pages_processed);
+              const piiCount =
+                analysisPiis ??
+                normalizeCount(batch.stats?.piis) ??
+                0;
+              const filesLabel = totalFiles === 1 ? 'file' : 'files';
+              const pagesLabel = pagesProcessed === 1 ? 'page' : 'pages';
+
+              return (
                 <div
-                  className="batch-content-modern"
-                  onClick={() => onBatchSelect(batch.batch_id)}
+                  key={batch.batch_id}
+                  className={`batch-item-modern ${selectedBatch === batch.batch_id ? 'selected' : ''}`}
                 >
-                  <div className="batch-name-modern">{batch.name}</div>
-                  <div className="batch-meta-modern">
-                    <span className="batch-date">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10" />
-                        <polyline points="12 6 12 12 16 14" />
-                      </svg>
-                      {formatDate(batch.created_at)}
-                    </span>
-                    <span className="batch-stats">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                        <polyline points="14 2 14 8 20 8" />
-                      </svg>
-                      {batch.stats?.files || 0} files
-                    </span>
-                    <span className="batch-stats">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-                      </svg>
-                      {batch.stats?.piis || 0} PIIs
-                    </span>
+                  <div
+                    className="batch-content-modern"
+                    onClick={() => onBatchSelect(batch.batch_id)}
+                  >
+                    <div className="batch-name-modern">{batch.name}</div>
+                    <div className="batch-meta-modern">
+                      <span className="batch-date">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <circle cx="12" cy="12" r="10" />
+                          <polyline points="12 6 12 12 16 14" />
+                        </svg>
+                        {formatDate(processedAt)}
+                      </span>
+                      <span className="batch-stats">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                        </svg>
+                        {totalFiles} {filesLabel}
+                      </span>
+                      {pagesProcessed != null && (
+                        <span className="batch-stats">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M4 4h16v16H4z" />
+                            <path d="M4 9h16M9 9v11" />
+                          </svg>
+                          {pagesProcessed} {pagesLabel}
+                        </span>
+                      )}
+                      <span className="batch-stats">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                        </svg>
+                        {piiCount} PIIs
+                      </span>
+                    </div>
                   </div>
-                </div>
-                <div className="delete-batch-wrapper">
-                  {showDeleteConfirm === batch.batch_id ? (
-                    <>
+                  <div className="delete-batch-wrapper">
+                    {showDeleteConfirm === batch.batch_id ? (
+                      <>
+                        <button
+                          className="btn-delete-batch-modern confirm-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteBatch(batch.batch_id);
+                          }}
+                          disabled={deletingBatchId === batch.batch_id}
+                          title="Confirm deletion"
+                        >
+                          <FiCheck className="delete-icon confirm" />
+                        </button>
+                        <button
+                          className="btn-delete-batch-modern cancel-btn"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowDeleteConfirm(null);
+                          }}
+                          disabled={deletingBatchId === batch.batch_id}
+                          title="Cancel"
+                        >
+                          <FiX className="delete-icon cancel" />
+                        </button>
+                      </>
+                    ) : (
                       <button
-                        className="btn-delete-batch-modern confirm-btn"
+                        className="btn-delete-batch-modern"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleDeleteBatch(batch.batch_id);
                         }}
                         disabled={deletingBatchId === batch.batch_id}
-                        title="Confirm deletion"
+                        title="Delete batch"
                       >
-                        <FiCheck className="delete-icon confirm" />
+                        {deletingBatchId === batch.batch_id ? (
+                          <span className="delete-loading">...</span>
+                        ) : (
+                          <FiTrash2 className="delete-icon" />
+                        )}
                       </button>
-                      <button
-                        className="btn-delete-batch-modern cancel-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setShowDeleteConfirm(null);
-                        }}
-                        disabled={deletingBatchId === batch.batch_id}
-                        title="Cancel"
-                      >
-                        <FiX className="delete-icon cancel" />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className="btn-delete-batch-modern"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteBatch(batch.batch_id);
-                      }}
-                      disabled={deletingBatchId === batch.batch_id}
-                      title="Delete batch"
-                    >
-                      {deletingBatchId === batch.batch_id ? (
-                        <span className="delete-loading">...</span>
-                      ) : (
-                        <FiTrash2 className="delete-icon" />
-                      )}
-                    </button>
-                  )}
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

@@ -76,7 +76,11 @@ def update_plan():
         success = mongo_client.update_user_plan(email, plan, billing_period)
         
         if success:
-            return jsonify({'message': 'Plan updated successfully'}), 200
+            token_summary = mongo_client.get_token_summary(email) or {}
+            return jsonify({
+                'message': 'Plan updated successfully',
+                'tokens': token_summary
+            }), 200
         else:
             return jsonify({'error': 'User not found'}), 404
     

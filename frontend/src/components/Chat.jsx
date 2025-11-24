@@ -161,13 +161,13 @@ function Chat({ batchId, onFilesUploaded, tokenAccount, refreshTokenAccount }) {
     setUploading(true);
     try {
       const response = await uploadFiles(batchId, fileObjects);
-
+      
       // Show message about skipped files if any
       if (response?.skipped_count > 0) {
         const skippedMsg = `${response.skipped_count} file(s) already processed and skipped. Processing ${response.file_count} new file(s).`;
         console.log(skippedMsg);
       }
-
+      
       setJobId(response.job_id);
       setJobStatus('processing');
 
@@ -216,13 +216,13 @@ function Chat({ batchId, onFilesUploaded, tokenAccount, refreshTokenAccount }) {
     } catch (error) {
       console.error('Error uploading files:', error);
       const errorMsg = error.response?.data?.error || error.message;
-
+      
       if (error.response?.data?.skipped_count > 0) {
         alert(`All files were already processed. ${errorMsg}`);
       } else {
         alert('Upload failed: ' + errorMsg);
       }
-
+      
       setFiles(prev => prev.map(f => ({ ...f, status: 'error' })));
       setUploading(false);
       if (typeof refreshTokenAccount === 'function') {
@@ -265,6 +265,13 @@ function Chat({ batchId, onFilesUploaded, tokenAccount, refreshTokenAccount }) {
           if (onFilesUploaded) {
             onFilesUploaded();
           }
+          
+          // Auto-refresh dashboard after file processing completes
+          console.log('✅ File processing completed - Refreshing dashboard in 1 second...');
+          setTimeout(() => {
+            window.location.reload();
+          }, 1000);
+          
           // Stop polling after calling callback
           return;
         } else if (result.status === 'failed') {

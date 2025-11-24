@@ -1892,6 +1892,38 @@
         gap: 24px;
     }
 
+    /* Center content in feature cards on mobile/tablet */
+    .feature-card {
+        padding: 32px 24px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .feature-icon-wrapper {
+        margin-left: auto;
+        margin-right: auto;
+        margin-bottom: 20px;
+    }
+
+    .feature-title {
+        text-align: center;
+        font-size: 20px;
+    }
+
+    .feature-desc {
+        text-align: center;
+        margin: 0 auto;
+        max-width: 100%;
+    }
+
+    .feature-highlight {
+        margin: 0 auto;
+        text-align: center;
+    }
+
     /* Mobile: 2 cards per row, scaled down */
     .stats-section .features-container {
         padding: 0 12px;
@@ -1987,5 +2019,42 @@
     .btn-cta-secondary {
         width: 100%;
         justify-content: center;
+    }
+}
+
+/* Smaller mobile screens */
+@media (max-width: 540px) {
+    .feature-card {
+        padding: 24px 16px;
+    }
+
+    .feature-icon-wrapper {
+        width: 56px;
+        height: 56px;
+        margin-bottom: 16px;
+    }
+
+    .feature-icon {
+        font-size: 28px;
+    }
+
+    .feature-icon svg {
+        width: 28px;
+        height: 28px;
+    }
+
+    .feature-title {
+        font-size: 18px;
+        margin-bottom: 10px;
+    }
+
+    .feature-desc {
+        font-size: 14px;
+        line-height: 1.6;
+    }
+
+    .feature-highlight {
+        font-size: 13px;
+        padding: 6px 12px;
     }
 }

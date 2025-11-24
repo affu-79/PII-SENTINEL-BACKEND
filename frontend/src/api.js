@@ -20,6 +20,40 @@ export const api = axios.create({
   }
 });
 
+// Setup axios interceptors for network monitoring
+api.interceptors.request.use(
+  (config) => {
+    config.metadata = { startTime: new Date() };
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+api.interceptors.response.use(
+  (response) => {
+    // Log slow responses
+    const duration = new Date() - response.config.metadata.startTime;
+    if (duration > 3000 && process.env.NODE_ENV === 'development') {
+      console.warn(`⚠️ Slow API response: ${response.config.url} (${duration}ms)`);
+    }
+    return response;
+  },
+  (error) => {
+    // Enhance error with network-specific information
+    if (!error.response) {
+      if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
+        error.isNetworkError = true;
+        console.error('❌ Network error: Unable to reach server');
+      }
+      if (error.code === 'ECONNABORTED') {
+        error.isTimeout = true;
+        console.error('❌ Request timeout');
+      }
+    }
+    return Promise.reject(error);
+  }
+);
+
 // Log API configuration (without exposing key)
 if (process.env.NODE_ENV === 'development') {
   console.log('API Base URL:', API_BASE_URL);
@@ -109,7 +143,41 @@ export const uploadFiles = async (batchId, files) => {
     }
 
     console.log('✅ Upload successful!');
-    return JSON.parse(responseText);
+    const responseData = JSON.parse(responseText);
+    
+    // Log pipeline information for each file
+    if (responseData.results && Array.isArray(responseData.results)) {
+      console.log('\n📊 ═══════════════════════════════════════════════════════');
+      console.log('📊 PROCESSING RESULTS:');
+      console.log('📊 ═══════════════════════════════════════════════════════');
+      
+      responseData.results.forEach((result, index) => {
+        console.log(`\n🔹 File ${index + 1}: ${result.filename || 'Unknown'}`);
+        console.log(`   ├─ Success: ${result.success ? '✅ YES' : '❌ NO'}`);
+        console.log(`   ├─ File Type: ${result.file_type || result.detector_used || 'N/A'}`);
+        console.log(`   ├─ Pipeline Used: ${result.pipeline_used || 'Not specified'}`);
+        console.log(`   ├─ Detector: ${result.detector_used || 'N/A'}`);
+        console.log(`   ├─ PIIs Found: ${result.pii_count || result.piis?.length || 0}`);
+        console.log(`   ├─ Processing Time: ${result.processing_time || 0}s`);
+        console.log(`   └─ Pages: ${result.page_count || 1}`);
+        
+        // Log deduplication info if available
+        if (result.piis && result.piis.length > 0) {
+          const deduplicated = result.piis.filter(pii => pii.is_deduplicated);
+          if (deduplicated.length > 0) {
+            console.log(`   🔄 Deduplication: ${deduplicated.length} PII(s) had duplicates removed`);
+          }
+          
+          // Log unique PII types
+          const uniqueTypes = [...new Set(result.piis.map(pii => pii.type))];
+          console.log(`   📋 PII Types: ${uniqueTypes.join(', ')}`);
+        }
+      });
+      
+      console.log('\n📊 ═══════════════════════════════════════════════════════\n');
+    }
+    
+    return responseData;
   } catch (error) {
     console.error('❌ Upload error:', error);
     throw error;
@@ -118,7 +186,42 @@ export const uploadFiles = async (batchId, files) => {
 
 export const getJobResult = async (jobId) => {
   const response = await api.get(`/api/job-result?job_id=${jobId}`);
-  return response.data;
+  const data = response.data;
+  
+  // Log pipeline information when polling job results
+  if (data && data.results && Array.isArray(data.results)) {
+    console.log('\n📊 ═══════════════════════════════════════════════════════');
+    console.log(`📊 JOB RESULT (${jobId}):`, data.status || 'processing');
+    console.log('📊 ═══════════════════════════════════════════════════════');
+    
+    data.results.forEach((result, index) => {
+      if (result.filename) {
+        console.log(`\n🔹 File ${index + 1}: ${result.filename}`);
+        console.log(`   ├─ Pipeline Used: ${result.pipeline_used || 'Not specified'}`);
+        console.log(`   ├─ Detector: ${result.detector_used || 'N/A'}`);
+        console.log(`   ├─ Document Type: ${result.document_type || 'GENERIC'}`);
+        console.log(`   ├─ PIIs Found: ${result.pii_count || 0}`);
+        console.log(`   └─ Processing Time: ${result.processing_time || 0}s`);
+        
+        // Log PII types found (if available)
+        if (result.piis && result.piis.length > 0) {
+          const uniqueTypes = [...new Set(result.piis.map(pii => pii.type))];
+          console.log(`   📋 PII Types: ${uniqueTypes.join(', ')}`);
+          
+          // Log occurrence counts for duplicates
+          result.piis.forEach(pii => {
+            if (pii.occurrence_count && pii.occurrence_count > 1) {
+              console.log(`      ↳ ${pii.type}: ${pii.occurrence_count} occurrences (all will be masked)`);
+            }
+          });
+        }
+      }
+    });
+    
+    console.log('\n📊 ═══════════════════════════════════════════════════════\n');
+  }
+  
+  return data;
 };
 
 export const maskFiles = async (jobId, maskType, password = null, batchId = null, selectedPiiTypes = null) => {
@@ -252,6 +355,8 @@ export const getFilePiis = async (batchId, filename, page = 1, perPage = 20) => 
 
 export const getProfile = async (username = null, email = null) => {
   const params = username ? { username } : { email };
+  // Add timestamp to bypass cache
+  params._t = Date.now();
   const response = await api.get('/api/profile', { params });
   return response.data;
 };
@@ -325,7 +430,39 @@ export const updatePreferences = async (data) => {
 
 export const downloadUserData = async (email) => {
   const response = await api.post('/api/settings/download-data', { email });
-  return response.data;
+  const payload = response.data || {};
+
+  if (!payload.success || !payload.downloadUrl) {
+    return payload;
+  }
+
+  try {
+    const fileResponse = await api.get(payload.downloadUrl, {
+      responseType: 'blob',
+      headers: {
+        Accept: 'application/pdf'
+      }
+    });
+
+    const contentDisposition = fileResponse.headers?.['content-disposition'] || '';
+    let fileName = payload.fileName || 'PII-Sentinel-DataExport.pdf';
+    const match = contentDisposition.match(/filename="?([^"]+)"?/i);
+    if (match && match[1]) {
+      fileName = match[1];
+    }
+
+    return {
+      success: true,
+      blob: fileResponse.data,
+      fileName,
+      message: payload.message || 'Data export prepared successfully'
+    };
+  } catch (downloadError) {
+    return {
+      success: false,
+      error: downloadError.response?.data?.error || 'Failed to download data export'
+    };
+  }
 };
 
 export const clearActivityLogs = async (email) => {
@@ -369,6 +506,18 @@ export const fetchTokenSummary = async (userEmail) => {
     throw new Error('User email is required to fetch token summary.');
   }
   const response = await api.get('/api/user/tokens', {
+    params: {
+      user_id: userEmail
+    }
+  });
+  return response.data;
+};
+
+export const fetchUserActivity = async (userEmail) => {
+  if (!userEmail) {
+    throw new Error('User email is required to fetch activity.');
+  }
+  const response = await api.get('/api/user/activity', {
     params: {
       user_id: userEmail
     }
@@ -462,6 +611,213 @@ export const consumeTokenAction = async ({ action, userEmail, metadata = {} }) =
     user_id: userEmail,
     metadata
   });
+  return response.data;
+};
+
+// ============================================================================
+// RAZORPAY PAYMENT APIs
+// ============================================================================
+
+/**
+ * Create a Razorpay order for plan upgrade
+ * @param {string} planId - Plan ID ('professional' or 'enterprise')
+ * @param {string} userEmail - User email
+ * @param {string} userId - User ID
+ * @returns {Promise} Order details (order_id, amount, currency, key)
+ */
+export const createPaymentOrder = async ({ planId, userEmail, userId, billingPeriod = 'monthly' }) => {
+  if (!planId) {
+    throw new Error('Plan ID is required');
+  }
+  if (!userEmail) {
+    throw new Error('User email is required');
+  }
+  
+  const response = await api.post('/api/payment/create-order', {
+    plan_id: planId,
+    email: userEmail,
+    user_id: userId || userEmail,
+    billing_period: billingPeriod,  // 'monthly' or 'yearly'
+    notes: {
+      user_email: userEmail,
+      plan: planId,
+      billing_period: billingPeriod,
+      timestamp: new Date().toISOString()
+    }
+  });
+  
+  return response.data;
+};
+
+/**
+ * Create a Razorpay order for token addon purchase
+ * @param {number} tokenAmount - Number of tokens to purchase
+ * @param {string} userEmail - User email
+ * @param {string} userId - User ID
+ * @returns {Promise} Order details (order_id, amount, currency, key)
+ */
+export const createTokenAddonOrder = async ({ tokenAmount, userEmail, userId }) => {
+  if (!tokenAmount || tokenAmount <= 0) {
+    throw new Error('Valid token amount is required');
+  }
+  if (!userEmail) {
+    throw new Error('User email is required');
+  }
+  
+  const response = await api.post('/api/payment/create-token-order', {
+    token_amount: tokenAmount,
+    email: userEmail,
+    user_id: userId || userEmail,
+    notes: {
+      user_email: userEmail,
+      token_addon: tokenAmount,
+      timestamp: new Date().toISOString()
+    }
+  });
+  
+  return response.data;
+};
+
+/**
+ * Verify payment after successful transaction
+ * @param {string} razorpayOrderId - Order ID from Razorpay
+ * @param {string} razorpayPaymentId - Payment ID from Razorpay
+ * @param {string} razorpaySignature - Signature from Razorpay
+ * @param {string} userEmail - User email
+ * @param {string} planId - Plan ID (for plan upgrades) or null (for token addons)
+ * @param {number} tokenAmount - Token amount (for token addons) or null (for plan upgrades)
+ * @returns {Promise} Verification result
+ */
+export const verifyPayment = async ({
+  razorpayOrderId,
+  razorpayPaymentId,
+  razorpaySignature,
+  userEmail,
+  planId = null,
+  tokenAmount = null
+}) => {
+  if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+    throw new Error('Payment details are incomplete');
+  }
+  if (!userEmail) {
+    throw new Error('User email is required');
+  }
+  
+  const response = await api.post('/api/payment/verify', {
+    razorpay_order_id: razorpayOrderId,
+    razorpay_payment_id: razorpayPaymentId,
+    razorpay_signature: razorpaySignature,
+    email: userEmail,
+    user_id: userEmail,  // Add user_id for authentication
+    plan_id: planId,
+    token_amount: tokenAmount
+  });
+  
+  return response.data;
+};
+
+/**
+ * Get payment history for user
+ * @param {string} userEmail - User email
+ * @returns {Promise} Payment history
+ */
+export const getPaymentHistory = async (userEmail) => {
+  if (!userEmail) {
+    throw new Error('User email is required');
+  }
+  
+  const response = await api.get(`/api/payment/history?email=${userEmail}&user_id=${userEmail}`);
+  return response.data;
+};
+
+/**
+ * Download invoice for a payment
+ * @param {string} paymentId - Payment ID
+ * @param {string} userEmail - User email
+ * @returns {Promise} Invoice blob
+ */
+export const downloadInvoice = async (paymentId, userEmail) => {
+  if (!paymentId || !userEmail) {
+    throw new Error('Payment ID and user email are required');
+  }
+  
+  const response = await api.get(`/api/payment/invoice/${paymentId}?email=${userEmail}&user_id=${userEmail}`, {
+    responseType: 'blob'
+  });
+  
+  // Create a download link
+  const blob = new Blob([response.data], { type: 'text/html' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `invoice_${paymentId}.html`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+  
+  return response.data;
+};
+
+/**
+ * Generate comprehensive analysis report for a batch
+ * @param {string} batchId - Batch ID
+ * @param {string} userEmail - User email
+ * @returns {Promise} Report generation result
+ */
+export const generateAnalysisReport = async (batchId, userEmail) => {
+  if (!batchId || !userEmail) {
+    throw new Error('Batch ID and user email are required');
+  }
+  
+  const response = await api.post(`/api/batch/${batchId}/generate-report`, {
+    email: userEmail,
+    user_id: userEmail
+  });
+  
+  return response.data;
+};
+
+/**
+ * Download generated analysis report
+ * @param {string} batchId - Batch ID
+ * @param {string} filename - Report filename
+ * @returns {Promise} Report blob
+ */
+export const downloadAnalysisReport = async (batchId, filename) => {
+  if (!batchId || !filename) {
+    throw new Error('Batch ID and filename are required');
+  }
+  
+  const response = await api.get(`/api/batch/${batchId}/download-report?filename=${filename}`, {
+    responseType: 'blob'
+  });
+  
+  return new Blob([response.data], { type: 'application/pdf' });
+};
+
+/**
+ * Share analysis report
+ * @param {string} batchId - Batch ID
+ * @param {string} filename - Report filename
+ * @param {string} method - Share method ('email', 'whatsapp', 'link')
+ * @param {string} recipient - Recipient email or phone
+ * @param {string} userEmail - User email
+ * @returns {Promise} Share result
+ */
+export const shareAnalysisReport = async (batchId, filename, method, recipient, userEmail) => {
+  if (!batchId || !filename || !method || !userEmail) {
+    throw new Error('Batch ID, filename, method, and user email are required');
+  }
+  
+  const response = await api.post(`/api/batch/${batchId}/share-report`, {
+    filename,
+    method,
+    recipient,
+    email: userEmail,
+    user_id: userEmail
+  });
+  
   return response.data;
 };
 

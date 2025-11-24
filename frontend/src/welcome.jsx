@@ -1,5 +1,5 @@
 // Welcome.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   FiTarget, FiTrendingUp, FiZap, FiDollarSign, FiShield, FiCheckCircle,
@@ -9,6 +9,7 @@ import {
 import ScrollButton from "./components/ScrollButton";
 import Footer from "./components/Footer";
 import "./welcome.css";
+import demoVideo from "./assets/vedio.webm";
 
 const Welcome = ({
   onOpenProfile = () => { },
@@ -17,6 +18,7 @@ const Welcome = ({
 }) => {
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const demoVideoRef = useRef(null);
 
   const handleGetStarted = () => {
     navigate('/dashboard');
@@ -165,6 +167,53 @@ const Welcome = ({
     };
   }, []);
 
+  useEffect(() => {
+    const video = demoVideoRef.current;
+    if (!video) return;
+
+    const TRIM_START = 4;
+    const seekToTrimPoint = () => {
+      if (!video.duration || video.duration <= TRIM_START) {
+        return;
+      }
+      if (video.currentTime < TRIM_START - 0.05) {
+        try {
+          video.currentTime = TRIM_START;
+        } catch (err) {
+          // Some browsers prevent setting currentTime immediately; ignore.
+        }
+      }
+    };
+
+    const handleLoaded = () => {
+      seekToTrimPoint();
+      video.play().catch(() => {
+        /* Autoplay might be blocked; ignore. */
+      });
+    };
+
+    const handleEnded = () => {
+      seekToTrimPoint();
+      video.play().catch(() => {
+        /* Ignore playback failures */
+      });
+    };
+
+    const handlePlay = () => {
+      seekToTrimPoint();
+    };
+
+    video.addEventListener('loadedmetadata', handleLoaded);
+    video.addEventListener('play', handlePlay);
+    video.addEventListener('ended', handleEnded);
+
+    return () => {
+      video.removeEventListener('loadedmetadata', handleLoaded);
+      video.removeEventListener('play', handlePlay);
+      video.removeEventListener('ended', handleEnded);
+    };
+  }, []);
+
 
   return (
     <div className="welcome-page">
@@ -257,6 +306,44 @@ const Welcome = ({
             <p className="hero-caption">
               Imagine securing your sensitive data before it becomes vulnerable
             </p>
+          </div>
+        </div>
+      </section>
+
+      {/* Demo Video Section */}
+      <section className="demo-video-section">
+        <div className="container">
+          <div className="demo-video-header">
+            <div className="demo-video-badge">
+              <span>See it in action</span>
+            </div>
+            <h2 className="demo-video-title">Experience the PII Sentinel workflow in seconds</h2>
+            <p className="demo-video-subtitle">
+              Watch how our automated detection, review, and remediation loop keeps your most sensitive data safe.
+            </p>
+          </div>
+          <div className="demo-video-sketch">
+            <div className="demo-video-browser">
+              <div className="demo-video-browser-bar">
+                <span className="browser-dot" />
+                <span className="browser-dot" />
+                <span className="browser-dot" />
+              </div>
+              <video
+                ref={demoVideoRef}
+                className="demo-video-player"
+                muted
+                playsInline
+                autoPlay
+                preload="metadata"
+              >
+                <source src={demoVideo} type="video/webm" />
+                Your browser does not support the video tag.
+              </video>
+            </div>
+            <div className="demo-video-scribble demo-video-scribble-left" aria-hidden="true" />
+            <div className="demo-video-scribble demo-video-scribble-right" aria-hidden="true" />
+            <div className="demo-video-shadow" aria-hidden="true" />
           </div>
         </div>
       </section>
@@ -379,7 +466,7 @@ const Welcome = ({
                   </div>
                   <div className="additional-feature-item">
                     <FiCheckCircle className="check-icon" />
-                    <span>Multi-format support: PDF, DOCX, Images, CSV, TXT</span>
+                    <span>Multi-format support: PDF, DOCX, Images, CSV</span>
                   </div>
                   <div className="additional-feature-item">
                     <FiCheckCircle className="check-icon" />

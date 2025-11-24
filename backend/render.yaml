@@ -1,0 +1,118 @@
+# Render.com Blueprint for PII Sentinel Backend
+# This file configures automatic deployment on Render
+
+services:
+  # Backend Web Service
+  - type: web
+    name: pii-sentinel-backend
+    env: python
+    region: oregon # Change to your preferred region
+    plan: starter # Change to 'standard' or 'pro' for production
+    branch: main
+    buildCommand: |
+      cd backend
+      pip install --upgrade pip
+      pip install -r requirements.txt
+    startCommand: |
+      cd backend
+      gunicorn -c gunicorn_config.py app:app
+    envVars:
+      # MongoDB
+      - key: MONGO_URI
+        sync: false # Set manually in Render dashboard
+      - key: MONGO_DB_PREFIX
+        value: pii_sentinel_
+      - key: MONGO_POOL_SIZE
+        value: 100
+
+      # Security (Generate using generate_secrets.py)
+      - key: FLASK_SECRET
+        generateValue: true
+      - key: API_KEY
+        generateValue: true
+
+      # Server Configuration
+      - key: FLASK_ENV
+        value: production
+      - key: ENVIRONMENT
+        value: production
+      - key: FLASK_HOST
+        value: 0.0.0.0
+      - key: FLASK_PORT
+        value: 10000 # Render uses port 10000 by default
+      - key: LOG_LEVEL
+        value: WARNING
+
+      # CORS (Update with your frontend domain)
+      - key: CORS_ORIGINS
+        value: https://your-frontend-domain.com,https://www.your-frontend-domain.com
+
+      # Storage Path
+      - key: STORAGE_PATH
+        value: /opt/render/project/src/backend/data
+
+      # Performance
+      - key: MAX_IO_WORKERS
+        value: 64
+      - key: MAX_CPU_WORKERS
+        value: 8
+      - key: MAX_CONCURRENT_FILES
+        value: 128
+      - key: BATCH_SIZE
+        value: 50
+
+      # OCR Settings
+      - key: USE_GPU_OCR
+        value: false
+      - key: PDF_DPI
+        value: 150
+      - key: OCR_QUANTIZED
+        value: true
+      - key: USE_ADVANCED_DETECTOR
+        value: true
+
+      # Gunicorn
+      - key: GUNICORN_WORKERS
+        value: 4
+
+      # SMS Configuration (Set in Render dashboard)
+      - key: TWO_FACTOR_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER
+        sync: false
+
+      # Razorpay (Set in Render dashboard)
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+
+      # Google OAuth (Set in Render dashboard)
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+
+      # Redis (optional)
+      - key: REDIS_ENABLED
+        value: false
+
+    # Health check
+    healthCheckPath: /api/health
+
+    # Disk storage for file uploads
+    disk:
+      name: pii-sentinel-data
+      mountPath: /opt/render/project/src/backend/data
+      sizeGB: 10 # Adjust based on your needs
+
+# Note: After deployment:
+# 1. Go to Render dashboard > Environment
+# 2. Set sensitive values (MONGO_URI, API keys, secrets)
+# 3. Update CORS_ORIGINS with your actual frontend URL
+# 4. Save and trigger a new deploy
+

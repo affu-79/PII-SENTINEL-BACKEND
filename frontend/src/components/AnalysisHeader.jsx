@@ -30,8 +30,20 @@ const AnalysisHeader = ({ analysis }) => {
     const breakdown = analysis.stats?.breakdown || {};
     const totalPIIs = analysis.stats?.piis || 0;
     const piiTypesCount = Object.keys(breakdown).length;
-    const totalPages = files.reduce((sum, f) => sum + (f.page_count || 0), 0);
-    const scanDuration = analysis.stats?.scan_duration || 0;
+    const totalPages =
+      (analysis.summary && typeof analysis.summary.pages_processed === 'number'
+        ? analysis.summary.pages_processed
+        : files.reduce((sum, f) => sum + (f.page_count || 0), 0));
+    const scanDuration =
+      analysis.summary?.scan_duration ??
+      analysis.stats?.scan_duration ??
+      (analysis.started_at && analysis.processed_at
+        ? (new Date(analysis.processed_at).getTime() - new Date(analysis.started_at).getTime()) / 1000
+        : 0);
+    const formattedDuration =
+      scanDuration >= 60
+        ? `${Math.floor(scanDuration / 60)}m ${Math.round(scanDuration % 60)}s`
+        : `${Math.round(scanDuration)}s`;
     const avgPIIPerFile = fileCount > 0 ? (totalPIIs / fileCount).toFixed(1) : 0;
 
     // Find highest risk type
@@ -59,10 +71,31 @@ const AnalysisHeader = ({ analysis }) => {
       complianceScore = 90;
     }
 
-    // Format date
-    const processedDate = analysis.processed_at || analysis.updated_at || analysis.created_at;
+    // Format date - find the most recent file processing time
+    const processedDate = (() => {
+      // First, try to find the most recent file's processed_at timestamp
+      if (files && files.length > 0) {
+        const mostRecentFile = files.reduce((latest, file) => {
+          const fileProcessedAt = file.processed_at || file.updated_at || file.created_at;
+          if (!fileProcessedAt) return latest;
+          if (!latest) return fileProcessedAt;
+          const fileTime = new Date(fileProcessedAt).getTime();
+          const latestTime = new Date(latest).getTime();
+          return fileTime > latestTime ? fileProcessedAt : latest;
+        }, null);
+        
+        if (mostRecentFile) return mostRecentFile;
+      }
+      
+      // Fallback to batch timestamps if no file timestamps found
+      return analysis.processed_at || analysis.updated_at || analysis.created_at;
+    })();
+
     const formattedDate = processedDate
-      ? new Date(processedDate).toLocaleString()
+      ? (() => {
+          const date = new Date(processedDate);
+          return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        })()
       : 'Not processed';
 
     return {
@@ -70,7 +103,7 @@ const AnalysisHeader = ({ analysis }) => {
       totalPIIs,
       piiTypesCount,
       totalPages,
-      scanDuration,
+      scanDuration: formattedDuration,
       avgPIIPerFile,
       highestRiskType,
       riskLevel,
@@ -119,7 +152,7 @@ const AnalysisHeader = ({ analysis }) => {
     {
       icon: <FiClock />,
       label: 'Scan Duration',
-      value: `${metrics.scanDuration}s`,
+      value: metrics.scanDuration,
       color: '#fa709a'
     },
     {

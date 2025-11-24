@@ -94,8 +94,14 @@ const useTokenAccount = () => {
       }
     };
 
+    const handleUserLoggedIn = () => {
+      // User just logged in, refresh token account immediately
+      refresh();
+    };
+
     window.addEventListener('token-account-updated', handleUpdated);
     window.addEventListener('storage', handleStorage);
+    window.addEventListener('user-logged-in', handleUserLoggedIn);
 
     if (!tokenAccount) {
       refresh();
@@ -104,6 +110,7 @@ const useTokenAccount = () => {
     return () => {
       window.removeEventListener('token-account-updated', handleUpdated);
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('user-logged-in', handleUserLoggedIn);
     };
   }, [refresh, tokenAccount]);
 

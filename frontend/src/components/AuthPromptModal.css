@@ -1,293 +1,227 @@
-/* Auth Modal Styles */
+/* ------------------------------------------------------------
+ * Auth Prompt Modal
+ * Compact, utility-first styling with clear structure blocks
+ * ------------------------------------------------------------ */
 
-/* Backdrop with Blur */
+/* Backdrop -------------------------------------------------- */
 .auth-modal-backdrop {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.4);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  z-index: 9997;
-  animation: fadeInBackdrop 0.3s ease-in-out;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 1030;
+  animation: fade-in 0.25s ease-out;
 }
 
-/* Modal Overlay Container */
+/* Modal shell ---------------------------------------------- */
 .auth-modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9998;
-  padding: 20px;
+  padding: 24px;
+  z-index: 1040;
 }
 
-/* Modal Content */
 .auth-modal-content {
-  background: white;
-  border-radius: 24px;
-  padding: 50px 40px;
-  max-width: 500px;
-  width: 100%;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
   position: relative;
-  animation: slideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  width: min(460px, 100vw - 32px);
+  padding: 28px 26px;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.16);
+  animation: slide-up 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-/* Close Button */
+/* Close button --------------------------------------------- */
 .auth-modal-close {
   position: absolute;
-  top: 20px;
-  right: 20px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  color: #7f8c8d;
-  padding: 8px;
-  border-radius: 8px;
-  display: flex;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.3s ease;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(99, 102, 241, 0.08);
+  color: #4c51bf;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .auth-modal-close:hover {
-  background: #f0f2f5;
-  color: #2c3e50;
-  transform: rotate(90deg);
+  transform: scale(1.05);
+  box-shadow: 0 8px 18px rgba(99, 102, 241, 0.18);
 }
 
-/* Icon */
+/* Header ---------------------------------------------------- */
 .auth-modal-icon {
-  text-align: center;
-  margin-bottom: 24px;
-  animation: popIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s both;
+  display: flex;
+  justify-content: center;
+  margin-bottom: 18px;
 }
 
 .auth-modal-icon svg {
+  width: 58px;
+  height: 58px;
   color: #667eea;
-  filter: drop-shadow(0 4px 12px rgba(102, 126, 234, 0.15));
+  filter: drop-shadow(0 8px 20px rgba(102, 126, 234, 0.25));
 }
 
-/* Title */
 .auth-modal-title {
+  margin: 0 0 12px;
   font-size: 24px;
   font-weight: 700;
-  color: #2c3e50;
-  margin: 0 0 16px 0;
   text-align: center;
-  animation: slideInDown 0.4s ease-out 0.15s both;
+  color: #1f2937;
 }
 
-/* Message */
 .auth-modal-message {
-  font-size: 16px;
-  color: #5a6c7d;
-  text-align: center;
-  margin: 0 0 30px 0;
+  margin: 0 0 26px;
+  font-size: 15px;
   line-height: 1.6;
-  animation: slideInDown 0.4s ease-out 0.2s both;
+  text-align: center;
+  color: #4b5563;
 }
 
-/* Feature Highlights */
+/* Feature list --------------------------------------------- */
 .auth-modal-features {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 12px;
-  margin-bottom: 32px;
-  animation: slideInUp 0.4s ease-out 0.25s both;
+  margin-bottom: 28px;
 }
 
 .feature-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: linear-gradient(135deg, #f5f7fa 0%, #f0f4f8 100%);
-  border-radius: 12px;
-  border: 1px solid #e5e9f0;
-  transition: all 0.3s ease;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%);
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .feature-item:hover {
-  background: linear-gradient(135deg, #f0f4f8 0%, #e8ecf3 100%);
-  border-color: #d0d8e3;
   transform: translateX(4px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 8px 18px rgba(102, 126, 234, 0.18);
 }
 
 .feature-icon {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  background: white;
+  width: 22px;
+  height: 22px;
   border-radius: 8px;
-  color: #667eea;
-  flex-shrink: 0;
+  color: #5c6ded;
+  background: rgba(102, 126, 234, 0.18);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.18);
 }
 
-.feature-item span {
+.feature-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.feature-text {
   font-size: 14px;
-  font-weight: 500;
-  color: #2c3e50;
+  font-weight: 600;
+  color: #1f2937;
 }
 
-/* Buttons Container */
+/* Action buttons ------------------------------------------- */
 .auth-modal-buttons {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 12px;
-  margin-bottom: 24px;
-  animation: slideInUp 0.4s ease-out 0.3s both;
+  margin-bottom: 20px;
 }
 
-/* Modal Button */
 .auth-modal-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 14px 24px;
-  border: 2px solid;
-  border-radius: 12px;
-  font-size: 16px;
+  padding: 13px 22px;
+  border-radius: 14px;
+  border: 2px solid transparent;
+  font-size: 15px;
   font-weight: 600;
-  cursor: pointer;
-  transition: all 0.3s ease;
+  letter-spacing: 0.4px;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
-/* Create Account Button */
+.auth-modal-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 .btn-create-account {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  border-color: #667eea;
-  color: white;
-  box-shadow: 0 8px 24px rgba(102, 126, 234, 0.25);
+  color: #fff;
+  box-shadow: 0 14px 32px rgba(102, 126, 234, 0.32);
 }
 
 .btn-create-account:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 12px 32px rgba(102, 126, 234, 0.35);
+  transform: translateY(-1px);
+  box-shadow: 0 16px 38px rgba(102, 126, 234, 0.38);
 }
 
-.btn-create-account:active {
-  transform: translateY(0);
-}
-
-/* Sign In Button */
 .btn-sign-in {
-  background: white;
+  background: #fff;
+  color: #5c6ded;
   border-color: #667eea;
-  color: #667eea;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.1);
+  box-shadow: 0 10px 26px rgba(102, 126, 234, 0.18);
 }
 
 .btn-sign-in:hover {
-  background: #f8fafc;
-  border-color: #764ba2;
-  color: #764ba2;
-  transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(102, 126, 234, 0.15);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px rgba(102, 126, 234, 0.24);
 }
 
-.btn-sign-in:active {
-  transform: translateY(0);
-}
-
-/* Button SVG */
-.auth-modal-btn svg {
-  transition: transform 0.3s ease;
-}
-
-.auth-modal-btn:hover svg {
-  transform: scale(1.1);
-}
-
-/* Footer */
+/* Footer ---------------------------------------------------- */
 .auth-modal-footer {
-  font-size: 13px;
-  color: #95a5a6;
-  text-align: center;
   margin: 0;
-  animation: fadeIn 0.4s ease-out 0.4s both;
+  text-align: center;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  color: #93a2b8;
 }
 
-/* Animations */
-@keyframes fadeInBackdrop {
+/* Animations ------------------------------------------------ */
+@keyframes fade-in {
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
 }
 
-@keyframes slideUp {
+@keyframes slide-up {
   from {
     opacity: 0;
-    transform: translateY(30px);
+    transform: translateY(28px);
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
 
-@keyframes slideInDown {
-  from {
-    opacity: 0;
-    transform: translateY(-15px);
-  }
   to {
     opacity: 1;
     transform: translateY(0);
   }
 }
 
-@keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(15px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes popIn {
-  from {
-    opacity: 0;
-    transform: scale(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-/* Responsive Design */
+/* Responsive tweaks ---------------------------------------- */
 @media (max-width: 768px) {
   .auth-modal-content {
-    padding: 40px 30px;
-    max-width: 90%;
+    padding: 24px 20px;
   }
 
   .auth-modal-title {
@@ -295,28 +229,23 @@
   }
 
   .auth-modal-message {
-    font-size: 15px;
-  }
-
-  .auth-modal-buttons {
-    gap: 10px;
+    font-size: 14px;
   }
 
   .auth-modal-btn {
-    padding: 12px 20px;
+    padding: 12px 18px;
     font-size: 14px;
   }
 }
 
-@media (max-width: 480px) {
-  .auth-modal-content {
-    padding: 30px 20px;
-    border-radius: 16px;
+@media (max-width: 520px) {
+  .auth-modal-overlay {
+    padding: 16px;
   }
 
-  .auth-modal-close {
-    top: 16px;
-    right: 16px;
+  .auth-modal-content {
+    padding: 22px 18px;
+    border-radius: 20px;
   }
 
   .auth-modal-icon svg {
@@ -324,40 +253,16 @@
     height: 48px;
   }
 
-  .auth-modal-title {
-    font-size: 20px;
-    margin-bottom: 12px;
-  }
-
-  .auth-modal-message {
-    font-size: 14px;
-    margin-bottom: 20px;
-  }
-
-  .auth-modal-features {
-    gap: 10px;
-    margin-bottom: 24px;
-  }
-
   .feature-item {
     padding: 10px 12px;
-    font-size: 13px;
-  }
-
-  .feature-icon {
-    width: 28px;
-    height: 28px;
-  }
-
-  .auth-modal-btn {
-    padding: 12px 16px;
-    font-size: 13px;
     gap: 8px;
   }
 
-  .auth-modal-btn svg {
-    width: 18px;
-    height: 18px;
+  .feature-text {
+    font-size: 13px;
+  }
+
+  .auth-modal-btn {
+    padding: 11px 16px;
   }
 }
-

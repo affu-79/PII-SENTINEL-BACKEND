@@ -22,8 +22,12 @@ import {
   FiEye,
   FiTarget,
   FiZap,
-  FiInfo
+  FiInfo,
+  FiMail,
+  FiShare2,
+  FiLink
 } from 'react-icons/fi';
+import { generateAnalysisReport, downloadAnalysisReport, shareAnalysisReport } from '../api';
 import './AdvancedPIIAnalysis.css';
 
 /**
@@ -32,6 +36,125 @@ import './AdvancedPIIAnalysis.css';
  */
 const AdvancedPIIAnalysis = ({ analysis, batchId }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [generatingReport, setGeneratingReport] = useState(false);
+  const [reportGenerated, setReportGenerated] = useState(false);
+  const [reportData, setReportData] = useState(null);
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareMethod, setShareMethod] = useState('link');
+  const [shareRecipient, setShareRecipient] = useState('');
+  const [sharing, setSharing] = useState(false);
+
+  const getStoredUser = () => {
+    const raw = window.localStorage.getItem('userInfo');
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      console.warn('Unable to parse user info', error);
+      return null;
+    }
+  };
+
+  const handleGenerateReport = async () => {
+    const user = getStoredUser();
+    if (!user?.email) {
+      alert('Please log in to generate reports');
+      return;
+    }
+
+    setGeneratingReport(true);
+    try {
+      const result = await generateAnalysisReport(batchId, user.email);
+      
+      if (result.success) {
+        setReportData(result);
+        
+        // Download the report automatically
+        const blob = await downloadAnalysisReport(batchId, result.filename);
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = result.filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        
+        setReportGenerated(true);
+        
+        // Show success message
+        alert(`✅ Report Generated Successfully!\n\n` +
+              `Filename: ${result.filename}\n` +
+              `Tokens Used: ${result.tokens_used}\n` +
+              `Tokens Remaining: ${result.tokens_remaining !== null ? result.tokens_remaining : 'Unlimited'}\n\n` +
+              `The report has been downloaded to your device.`);
+      }
+    } catch (error) {
+      console.error('Error generating report:', error);
+      alert('❌ Failed to generate report: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setGeneratingReport(false);
+    }
+  };
+
+  const handleExportData = () => {
+    if (!reportData) {
+      alert('Please generate a report first before exporting');
+      return;
+    }
+    setShowShareModal(true);
+  };
+
+  const handleShare = async () => {
+    const user = getStoredUser();
+    if (!user?.email) {
+      alert('Please log in to share reports');
+      return;
+    }
+
+    if (!reportData) {
+      alert('Please generate a report first');
+      return;
+    }
+
+    if (shareMethod !== 'link' && !shareRecipient) {
+      alert('Please enter recipient information');
+      return;
+    }
+
+    setSharing(true);
+    try {
+      const result = await shareAnalysisReport(
+        batchId,
+        reportData.filename,
+        shareMethod,
+        shareRecipient,
+        user.email
+      );
+
+      if (result.success) {
+        if (shareMethod === 'whatsapp') {
+          window.open(result.whatsapp_url, '_blank');
+          alert('✅ Opening WhatsApp to share the report link');
+        } else if (shareMethod === 'email') {
+          const mailtoLink = `mailto:${shareRecipient}?subject=${encodeURIComponent(result.email_subject)}&body=${encodeURIComponent(result.email_body)}`;
+          window.location.href = mailtoLink;
+          alert('✅ Opening your email client');
+        } else {
+          // Copy link to clipboard
+          navigator.clipboard.writeText(result.share_url);
+          alert(`✅ Share link copied to clipboard!\n\nLink: ${result.share_url}\n\nExpires: ${new Date(result.expires_at).toLocaleDateString()}`);
+        }
+        setShowShareModal(false);
+        setShareRecipient('');
+      }
+    } catch (error) {
+      console.error('Error sharing report:', error);
+      alert('❌ Failed to share report: ' + (error.response?.data?.error || error.message));
+    } finally {
+      setSharing(false);
+    }
+  };
 
   // Generate data for visualizations from backend data
   const mockData = useMemo(() => {
@@ -251,151 +374,7 @@ const AdvancedPIIAnalysis = ({ analysis, batchId }) => {
       {/* Expanded Content */}
       <div className={`advanced-analysis-content ${isExpanded ? 'expanded' : ''}`}>
         <div className="analysis-sections">
-          {/* Section 1: Risk & Severity */}
-          <div className="analysis-section">
-            <h3 className="section-title">
-              <FiAlertTriangle /> Risk Assessment
-            </h3>
-            <div className="section-grid">
-              {/* Risk Heatmap */}
-              <div className="visualization-card">
-                <h4>Risk Heatmap</h4>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart data={mockData.riskHeatmap}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="type" fontSize={12} />
-                    <YAxis fontSize={12} />
-                    <Tooltip />
-                    <Bar dataKey="intensity" fill="#667eea" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Severity Radar */}
-              <div className="visualization-card">
-                <h4>Severity Radar</h4>
-                <ResponsiveContainer width="100%" height={200}>
-                  <RadarChart data={mockData.severityRadar}>
-                    <PolarGrid />
-                    <PolarAngleAxis dataKey="metric" fontSize={11} />
-                    <PolarRadiusAxis fontSize={11} />
-                    <Radar name="Severity" dataKey="value" stroke="#764ba2" fill="#764ba2" fillOpacity={0.6} />
-                    <Tooltip />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Compliance Score Gauge */}
-              <div className="visualization-card compact-card">
-                <h4>Compliance Score</h4>
-                <div className="gauge-container">
-                  <div className="gauge">
-                    <div className="gauge-value">{mockData.complianceScore}%</div>
-                    <div className="gauge-label">Score</div>
-                  </div>
-                  <div className="gauge-status low-compliance">At Risk</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 2: Distribution & Trends */}
-          <div className="analysis-section">
-            <h3 className="section-title">
-              <FiTrendingUp /> Distribution & Trends
-            </h3>
-            <div className="section-grid">
-              {/* Top 10 PII Types */}
-              <div className="visualization-card">
-                <h4>Top 10 PII Types</h4>
-                <ResponsiveContainer width="100%" height={200}>
-                  <BarChart layout="vertical" data={mockData.top10Types}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis type="number" fontSize={11} />
-                    <YAxis dataKey="name" type="category" width={80} fontSize={10} />
-                    <Tooltip />
-                    <Bar dataKey="count" fill="#f093fb" />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* PII by File Type */}
-              <div className="visualization-card">
-                <h4>PII by File Type</h4>
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie
-                      data={mockData.piiByFileType}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percentage }) => `${name} ${percentage}%`}
-                      outerRadius={60}
-                      fill="#8884d8"
-                      dataKey="value"
-                    >
-                      {mockData.piiByFileType.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Timeline Activity */}
-              <div className="visualization-card">
-                <h4>Activity Timeline</h4>
-                <ResponsiveContainer width="100%" height={200}>
-                  <LineChart data={mockData.timeline}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="date" fontSize={10} />
-                    <YAxis fontSize={11} />
-                    <Tooltip />
-                    <Line type="monotone" dataKey="events" stroke="#4facfe" strokeWidth={2} dot={{ r: 4 }} />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 3: Forecasting & Predictions */}
-          <div className="analysis-section">
-            <h3 className="section-title">
-              <FiTrendingUp /> AI Forecasting
-            </h3>
-            <div className="section-grid full-width">
-              {/* AI Exposure Forecast */}
-              <div className="visualization-card">
-                <h4>Exposure Forecast (12 Months)</h4>
-                <ResponsiveContainer width="100%" height={250}>
-                  <ComposedChart data={mockData.forecast}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="month" fontSize={11} />
-                    <YAxis fontSize={11} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="exposure" fill="#667eea" name="Current" />
-                    <Line type="monotone" dataKey="forecast" stroke="#f093fb" strokeWidth={2} name="Forecast" />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-
-              {/* Threat Score */}
-              <div className="visualization-card compact-card">
-                <h4>Threat Prediction</h4>
-                <div className="threat-score-container">
-                  <div className="threat-score-value">{mockData.threatScore}</div>
-                  <div className="threat-score-label">Threat Score</div>
-                  <div className={`threat-trend ${mockData.threatTrend.toLowerCase()}`}>
-                    ↑ {mockData.threatTrend} 5% this week
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 4: Detailed Analysis */}
+          {/* Section 1: Detailed Analysis */}
           <div className="analysis-section">
             <h3 className="section-title">
               <FiDatabase /> Detailed Analysis
@@ -450,7 +429,7 @@ const AdvancedPIIAnalysis = ({ analysis, batchId }) => {
             </div>
           </div>
 
-          {/* Section 5: Coverage & Metrics */}
+          {/* Section 2: Coverage & Metrics */}
           <div className="analysis-section">
             <h3 className="section-title">
               <FiShield /> Coverage Metrics
@@ -514,7 +493,7 @@ const AdvancedPIIAnalysis = ({ analysis, batchId }) => {
             </div>
           </div>
 
-          {/* Section 6: Advanced Clustering */}
+          {/* Section 3: Advanced Clustering */}
           <div className="analysis-section">
             <h3 className="section-title">
               <FiDatabase /> PII Classification & Clustering
@@ -685,15 +664,85 @@ const AdvancedPIIAnalysis = ({ analysis, batchId }) => {
 
           {/* Action Buttons */}
           <div className="analysis-actions">
-            <button className="action-btn download-btn">
-              <FiDownload /> Generate Report
+            <button 
+              className="action-btn download-btn"
+              onClick={handleGenerateReport}
+              disabled={generatingReport}
+            >
+              <FiDownload /> {generatingReport ? 'Generating Report...' : 'Generate Report'}
             </button>
-            <button className="action-btn export-btn">
-              <FiDatabase /> Export Data
+            <button 
+              className="action-btn export-btn"
+              onClick={handleExportData}
+              disabled={!reportGenerated}
+              title={!reportGenerated ? 'Generate a report first' : 'Share report'}
+            >
+              <FiShare2 /> Export Data
             </button>
           </div>
         </div>
       </div>
+
+      {/* Share Modal */}
+      {showShareModal && (
+        <div className="share-modal-overlay" onClick={() => setShowShareModal(false)}>
+          <div className="share-modal" onClick={(e) => e.stopPropagation()}>
+            <h3>Share Analysis Report</h3>
+            <p>Choose how you want to share this report</p>
+            
+            <div className="share-methods">
+              <button
+                className={`share-method-btn ${shareMethod === 'link' ? 'active' : ''}`}
+                onClick={() => setShareMethod('link')}
+              >
+                <FiLink /> Copy Link
+              </button>
+              <button
+                className={`share-method-btn ${shareMethod === 'email' ? 'active' : ''}`}
+                onClick={() => setShareMethod('email')}
+              >
+                <FiMail /> Email
+              </button>
+              <button
+                className={`share-method-btn ${shareMethod === 'whatsapp' ? 'active' : ''}`}
+                onClick={() => setShareMethod('whatsapp')}
+              >
+                <FiShare2 /> WhatsApp
+              </button>
+            </div>
+
+            {shareMethod !== 'link' && (
+              <div className="share-input-group">
+                <label>{shareMethod === 'email' ? 'Recipient Email:' : 'Phone Number:'}</label>
+                <input
+                  type={shareMethod === 'email' ? 'email' : 'tel'}
+                  value={shareRecipient}
+                  onChange={(e) => setShareRecipient(e.target.value)}
+                  placeholder={shareMethod === 'email' ? 'Enter email address' : 'Enter phone number'}
+                  className="share-input"
+                />
+              </div>
+            )}
+
+            <div className="share-modal-actions">
+              <button
+                className="btn-cancel"
+                onClick={() => setShowShareModal(false)}
+                disabled={sharing}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-share"
+                onClick={handleShare}
+                disabled={sharing}
+              >
+                {sharing ? 'Sharing...' : `Share via ${shareMethod === 'link' ? 'Link' : shareMethod === 'email' ? 'Email' : 'WhatsApp'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -164,14 +164,23 @@ def get_or_create_user(google_payload):
         
         if user:
             logger.info(f"✓ User found: {email}")
-            # Update last login
+            # Ensure tokens are initialized for existing users
+            mongo_client.ensure_user_token_document(email)
+            # Update last login and Google auth info
             now_iso = datetime.utcnow().isoformat()
             user['last_login'] = now_iso
             user['updated_at'] = now_iso
+            user['google_id'] = google_payload.get('sub', '')
+            user['is_google_user'] = True
             if getattr(mongo_client, "db", None) is not None:
                 mongo_client.db["User-Base"].update_one(
                     {"email": email},
-                    {"$set": {"last_login": now_iso, "updated_at": now_iso}}
+                    {"$set": {
+                        "last_login": now_iso,
+                        "updated_at": now_iso,
+                        "google_id": google_payload.get('sub', ''),
+                        "is_google_user": True
+                    }}
                 )
             return user, False, None
         else:
@@ -317,6 +326,14 @@ def google_auth():
             }), 500
         
         # Prepare response
+        # Clear profile cache to ensure fresh data on next profile fetch
+        try:
+            from app import profile_cache
+            profile_cache.clear()
+            logger.info("✓ Profile cache cleared after Google login")
+        except Exception as cache_err:
+            logger.warning(f"Could not clear profile cache: {cache_err}")
+        
         response = {
             'success': True,
             'message': 'Authentication successful',
@@ -327,6 +344,9 @@ def google_auth():
                 'username': user.get('username'),
                 'profile_picture': user.get('profile_picture'),
                 'account_status': user.get('account_status'),
+                'plan_id': user.get('plan_id'),
+                'google_id': user.get('google_id'),
+                'is_google_user': user.get('is_google_user'),
                 'created_at': serialize_datetime(user.get('created_at')),
                 'updated_at': serialize_datetime(user.get('updated_at')),
                 'last_login': serialize_datetime(user.get('last_login'))

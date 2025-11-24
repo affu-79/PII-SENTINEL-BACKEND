@@ -166,6 +166,14 @@ const CreateAccount = () => {
 
                 if (response.success) {
                     console.log('Account created successfully:', response);
+                    // Store user info and trigger token refresh
+                    if (response.user) {
+                        localStorage.setItem('userInfo', JSON.stringify(response.user));
+                        window.dispatchEvent(new CustomEvent('user-logged-in'));
+                    }
+                    if (response.token) {
+                        localStorage.setItem('authToken', response.token);
+                    }
                     setShowSuccessModal(true);
                 } else {
                     setError(response.error || 'Failed to create account');

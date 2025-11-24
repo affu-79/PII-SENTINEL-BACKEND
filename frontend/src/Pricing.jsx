@@ -10,20 +10,25 @@ import {
     FiMinus,
     FiInfo,
     FiCheckCircle,
+    FiCheck as FiCheckIcon,
+    FiUsers,
+    FiBarChart2,
     FiX
 } from 'react-icons/fi';
 import BillingToggle from './components/BillingToggle';
 import Footer from './components/Footer';
+import Loader from './components/Loader';
 import {
-    purchasePlan,
-    purchaseAddons,
+    createPaymentOrder,
+    createTokenAddonOrder,
+    verifyPayment,
     fetchTokenSummary,
     downloadInvoicePdf,
     fetchInvoiceMetadata
 } from './api';
 import './Pricing.css';
 
-const ADDON_TOKEN_PRICE = 20;
+const ADDON_TOKEN_PRICE = 1;
 const ANNUAL_DISCOUNT = 0.17;
 const RAZORPAY_SCRIPT_URL = 'https://checkout.razorpay.com/v1/checkout.js';
 const SIMULATION_ENABLED = process.env.REACT_APP_ENABLE_PAYMENT_SIMULATION === 'true';
@@ -91,8 +96,7 @@ const formatTokens = (value) => {
 
 const Pricing = () => {
     const navigate = useNavigate();
-    const [yearly, setYearly] = useState(false);
-    const billingCycle = yearly ? 'annual' : 'monthly';
+    const [billingCycle, setBillingCycle] = useState('monthly');
     const [currentUser, setCurrentUser] = useState(() => getStoredUser());
     const [tokenSummary, setTokenSummary] = useState(null);
     const [loadingTokens, setLoadingTokens] = useState(false);
@@ -177,6 +181,10 @@ const Pricing = () => {
         [navigate, resolveUser]
     );
 
+    const handleBillingChange = useCallback((cycle) => {
+        setBillingCycle(cycle === 'yearly' ? 'yearly' : 'monthly');
+    }, []);
+
     const prefetchInvoice = useCallback((paymentId, email) => {
         if (!paymentId || !email) {
             return;
@@ -198,9 +206,9 @@ const Pricing = () => {
         const computeSavings = (monthly) => (monthly === 0 ? 0 : monthly * 12 - computeAnnual(monthly));
 
         return [
-            {
+        {
                 id: 'starter',
-                name: 'Starter',
+            name: 'Starter',
                 icon: <FiZap />,
                 theme: 'starter',
                 badge: 'Free forever',
@@ -216,7 +224,7 @@ const Pricing = () => {
                     headline: '150 tokens every month',
                     subline: 'Auto-refresh: 5 tokens added each day'
                 },
-                features: [
+            features: [
                     'Document & image uploads consume 1 token per file',
                     'Real-time usage alerts keep you ahead of renewals',
                     'Usage dashboard with daily refresh history'
@@ -232,7 +240,7 @@ const Pricing = () => {
             },
             {
                 id: 'professional',
-                name: 'Professional',
+            name: 'Professional',
                 icon: <FiTrendingUp />,
                 theme: 'professional',
                 badge: 'Most popular',
@@ -245,22 +253,22 @@ const Pricing = () => {
                     annual: computeSavings(999)
                 },
                 tokens: {
-                    headline: '500 tokens every month',
-                    subline: 'Lock / Unlock JSON consume 5 tokens per run'
+                    headline: '2000 tokens every month',
+                    subline: 'Lock / Unlock JSON consume 50 tokens per run'
                 },
-                features: [
+            features: [
                     'Advanced Analysis Board and premium dashboards unlocked',
                     'Priority support with workspace audit trail & alerts',
                     'Role-based access with rolling log retention'
                 ],
                 limits: ['Unlimited lock/unlock available while tokens remain'],
                 cta: 'Upgrade to Professional',
-                ctaVariant: 'primary',
+                ctaVariant: 'outline',
                 meta: 'Best for SMEs and fast-growing product teams with compliance goals.'
             },
             {
                 id: 'enterprise',
-                name: 'Enterprise',
+            name: 'Enterprise',
                 icon: <FiShield />,
                 theme: 'enterprise',
                 badge: 'Unlimited',
@@ -276,21 +284,22 @@ const Pricing = () => {
                     headline: 'Unlimited tokens',
                     subline: 'All premium features, log records, and concierge onboarding included'
                 },
-                features: [
+            features: [
                     'Dedicated privacy engineer & 24/7 escalation desk',
                     'Granular log records with SIEM integrations & audit exports',
                     'Custom deployment, data residency, and procurement support'
                 ],
                 limits: [],
                 cta: 'Choose Enterprise',
-                ctaVariant: 'dark',
+                ctaVariant: 'outline',
                 meta: 'Tailored for regulated industries, SOC2-ready teams, and global deployments.'
             }
         ];
     }, []);
 
     const renderPrice = (plan) => {
-        const price = plan.pricing[billingCycle];
+        const billingKey = billingCycle === 'yearly' ? 'annual' : 'monthly';
+        const price = plan.pricing[billingKey];
         if (!price) {
             return (
                 <div className="pricing-card__price-wrapper">
@@ -302,8 +311,7 @@ const Pricing = () => {
         if (billingCycle === 'monthly') {
             return (
                 <div className="pricing-card__price-wrapper">
-                    <span className="pricing-card__price-currency">₹</span>
-                    <span className="pricing-card__price-value">{price.toLocaleString('en-IN')}</span>
+                    <span className="pricing-card__price-value">₹{price.toLocaleString('en-IN')}</span>
                     <span className="pricing-card__price-period">/month</span>
                 </div>
             );
@@ -311,8 +319,7 @@ const Pricing = () => {
         const equivalentMonthly = Math.round(price / 12);
         return (
             <div className="pricing-card__price-wrapper">
-                <span className="pricing-card__price-currency">₹</span>
-                <span className="pricing-card__price-value">{price.toLocaleString('en-IN')}</span>
+                <span className="pricing-card__price-value">₹{price.toLocaleString('en-IN')}</span>
                 <span className="pricing-card__price-period">/year</span>
                 <span className="pricing-card__price-detail">
                     Billed annually (~₹{equivalentMonthly.toLocaleString('en-IN')} / month)
@@ -333,71 +340,142 @@ const Pricing = () => {
             if (!user) {
                 return;
             }
+            
             const email = user.email;
-            if (plan.pricing.monthly > 0 && !SIMULATION_ENABLED && typeof window !== 'undefined' && !window.Razorpay) {
-                setPlanError('Payment gateway is still loading. Please wait a moment and try again.');
-                return;
-            }
-            setPlanLoading(plan.id);
-            try {
-                const response = await purchasePlan({
-                    planId: plan.id,
-                    userEmail: email,
-                    simulate: SIMULATION_ENABLED,
-                    billingPeriod: billingCycle
-                });
-
-                if (response.status === 'activated') {
-                    setTokenSummary(response.tokens);
-                    persistTokenSnapshot(response.tokens);
+            
+            // Free plan - activate immediately
+            if (plan.pricing.monthly === 0) {
+                setPlanLoading(plan.id);
+                try {
+                    // For free plan, just show success (backend handles on signup)
                     setModalState({
                         type: 'plan',
                         plan,
                         status: 'activated',
                         paymentId: null,
-                        tokensGranted: response.tokens
+                        tokensGranted: null
                     });
                     refreshTokens(email);
-                } else if (response.status === 'pending_payment' && response.razorpay) {
-                    const orderDetails = response.razorpay;
-                    const rzp = new window.Razorpay({
-                        key: orderDetails.key,
-                        amount: orderDetails.amount,
-                        currency: orderDetails.currency,
-                        name: 'PII Sentinel',
-                        description: `${plan.name} plan (${billingCycle === 'monthly' ? 'monthly' : 'annual'})`,
-                        order_id: orderDetails.order_id,
-                        notes: orderDetails.notes,
-                        prefill: getPrefill(user),
-                        theme: { color: '#4338CA' },
-                        handler: (paymentResponse) => {
-                            setPlanLoading(null);
-                            setModalState({
-                                type: 'plan',
-                                plan,
-                                status: 'processing',
-                                paymentId: paymentResponse.razorpay_payment_id,
-                                orderId: paymentResponse.razorpay_order_id
-                            });
-                            setTimeout(() => refreshTokens(email), 1200);
-                            prefetchInvoice(paymentResponse.razorpay_payment_id, email);
-                        },
-                        modal: {
-                            ondismiss: () => setPlanLoading(null)
-                        }
-                    });
-                    rzp.on('payment.failed', (failure) => {
-                        setPlanLoading(null);
-                        setModalState({
-                            type: 'error',
-                            title: 'Payment was not completed',
-                            message: failure.error?.description || 'The payment window was closed before completion.'
-                        });
-                    });
-                    rzp.open();
-                } else {
-                    setPlanError('Unexpected response from billing service. Please try again.');
+                } catch (error) {
+                    console.error('Error activating free plan', error);
+                    setPlanError('Failed to activate free plan. Please try again.');
+                } finally {
+                    setPlanLoading(null);
                 }
+                return;
+            }
+            
+            // Paid plans - check if Razorpay is loaded
+            if (typeof window !== 'undefined' && !window.Razorpay) {
+                setPlanError('Payment gateway is still loading. Please wait a moment and try again.');
+                return;
+            }
+            
+            setPlanLoading(plan.id);
+            try {
+                // Step 1: Create Razorpay order
+                console.log(`🔄 Creating payment order for ${plan.name} plan (${billingCycle})...`);
+                const orderData = await createPaymentOrder({
+                    planId: plan.id,
+                    userEmail: email,
+                    userId: email,
+                    billingPeriod: billingCycle  // Pass 'monthly' or 'yearly'
+                });
+
+                console.log('✓ Payment order created:', orderData.order_id);
+
+                // Step 2: Open Razorpay Checkout
+                const rzp = new window.Razorpay({
+                    key: orderData.key,
+                    amount: orderData.amount,
+                    currency: orderData.currency,
+                    name: 'PII Sentinel',
+                    description: `${plan.name} Plan Subscription`,
+                    image: '/logo.png',
+                    order_id: orderData.order_id,
+                    
+                    handler: async function (response) {
+                        try {
+                            console.log('🔄 Payment successful, verifying...');
+                            setPlanLoading(plan.id);
+                            
+                            // Step 3: Verify payment signature on backend
+                            const verificationResult = await verifyPayment({
+                                razorpayOrderId: response.razorpay_order_id,
+                                razorpayPaymentId: response.razorpay_payment_id,
+                                razorpaySignature: response.razorpay_signature,
+                                userEmail: email,
+                                planId: plan.id
+                            });
+
+                            if (verificationResult.success) {
+                                console.log('✅ Payment verified successfully!');
+                                
+                                // Show success modal
+                                setModalState({
+                                    type: 'plan',
+                                    plan,
+                                    status: 'activated',
+                                    paymentId: response.razorpay_payment_id,
+                                    tokensGranted: null
+                                });
+                                
+                                // Refresh tokens
+                                refreshTokens(email);
+                                
+                                // Reload page after 2 seconds to show updated plan
+                                setTimeout(() => {
+                                    window.location.reload();
+                                }, 2000);
+                            } else {
+                                throw new Error('Payment verification failed');
+                            }
+                        } catch (error) {
+                            console.error('❌ Payment verification error:', error);
+                            setPlanError('Payment verification failed. Please contact support.');
+                            setModalState({
+                                type: 'error',
+                                title: 'Payment Verification Failed',
+                                message: 'Your payment was successful but verification failed. Please contact support with your payment ID.'
+                            });
+                        } finally {
+                            setPlanLoading(null);
+                        }
+                    },
+                    
+                    prefill: getPrefill(user),
+                    
+                    notes: {
+                        plan_id: plan.id,
+                        user_email: email
+                    },
+                    
+                    theme: {
+                        color: '#5c6ded'
+                    },
+                    
+                    modal: {
+                        ondismiss: function() {
+                            console.log('Payment canceled by user');
+                            setPlanLoading(null);
+                            setPlanError('Payment canceled');
+                        }
+                    }
+                });
+                
+                rzp.on('payment.failed', function (response) {
+                    console.error('Payment failed:', response.error);
+                    setPlanLoading(null);
+                    setPlanError(response.error.description || 'Payment failed');
+                    setModalState({
+                        type: 'error',
+                        title: 'Payment Failed',
+                        message: response.error.description || 'Payment could not be completed. Please try again.'
+                    });
+                });
+                
+                rzp.open();
+
             } catch (error) {
                 console.error('Plan purchase failed', error);
                 const message =
@@ -447,66 +525,115 @@ const Pricing = () => {
             return;
         }
         const email = user.email;
-        if (!SIMULATION_ENABLED && typeof window !== 'undefined' && !window.Razorpay) {
+        if (typeof window !== 'undefined' && !window.Razorpay) {
             setAddonError('Payment gateway is still loading. Please wait a moment and try again.');
             return;
         }
         setAddonLoading(true);
         try {
-            const response = await purchaseAddons({
-                tokens: addonTokens,
+            // Step 1: Create Razorpay order for token addon
+            console.log(`🔄 Creating token addon order for ${addonTokens} tokens...`);
+            const orderData = await createTokenAddonOrder({
+                tokenAmount: addonTokens,
                 userEmail: email,
-                simulate: SIMULATION_ENABLED
+                userId: email
             });
 
-            if (response.status === 'credited') {
-                setModalState({
-                    type: 'addon',
-                    status: 'credited',
-                    tokensGranted: addonTokens,
-                    paymentId: null
-                });
-                refreshTokens(email);
-            } else if (response.status === 'pending_payment' && response.razorpay) {
-                const orderDetails = response.razorpay;
-                const rzp = new window.Razorpay({
-                    key: orderDetails.key,
-                    amount: orderDetails.amount,
-                    currency: orderDetails.currency,
-                    name: 'PII Sentinel',
-                    description: `${addonTokens} add-on tokens`,
-                    order_id: orderDetails.order_id,
-                    notes: orderDetails.notes,
-                    prefill: getPrefill(user),
-                    theme: { color: '#4338CA' },
-                    handler: (paymentResponse) => {
-                        setAddonLoading(false);
-                        setModalState({
-                            type: 'addon',
-                            status: 'processing',
-                            tokensGranted: addonTokens,
-                            paymentId: paymentResponse.razorpay_payment_id,
-                            orderId: paymentResponse.razorpay_order_id
+            console.log('✓ Token addon order created:', orderData.order_id);
+
+            const totalAmount = orderData.amount / 100; // Convert from paise to rupees
+
+            // Step 2: Open Razorpay Checkout
+            const rzp = new window.Razorpay({
+                key: orderData.key,
+                amount: orderData.amount,
+                currency: orderData.currency,
+                name: 'PII Sentinel',
+                description: `${addonTokens} Tokens Addon (₹${totalAmount})`,
+                image: '/logo.png',
+                order_id: orderData.order_id,
+                
+                handler: async function (response) {
+                    try {
+                        console.log('🔄 Payment successful, verifying...');
+                        setAddonLoading(true);
+                        
+                        // Step 3: Verify payment signature on backend
+                        const verificationResult = await verifyPayment({
+                            razorpayOrderId: response.razorpay_order_id,
+                            razorpayPaymentId: response.razorpay_payment_id,
+                            razorpaySignature: response.razorpay_signature,
+                            userEmail: email,
+                            tokenAmount: addonTokens
                         });
-                        setTimeout(() => refreshTokens(email), 1200);
-                        prefetchInvoice(paymentResponse.razorpay_payment_id, email);
-                    },
-                    modal: {
-                        ondismiss: () => setAddonLoading(false)
+
+                        if (verificationResult.success) {
+                            console.log('✅ Payment verified successfully!');
+                            
+                            // Show success modal
+                            setModalState({
+                                type: 'addon',
+                                status: 'credited',
+                                tokensGranted: addonTokens,
+                                paymentId: response.razorpay_payment_id
+                            });
+                            
+                            // Refresh tokens
+                            refreshTokens(email);
+                            
+                            // Reload page after 2 seconds
+                            setTimeout(() => {
+                                window.location.reload();
+                            }, 2000);
+                        } else {
+                            throw new Error('Payment verification failed');
+                        }
+                    } catch (error) {
+                        console.error('❌ Payment verification error:', error);
+                        setAddonError('Payment verification failed. Please contact support.');
+                        setModalState({
+                            type: 'error',
+                            title: 'Payment Verification Failed',
+                            message: 'Your payment was successful but verification failed. Please contact support with your payment ID.'
+                        });
+                    } finally {
+                        setAddonLoading(false);
                     }
+                },
+                
+                prefill: getPrefill(user),
+                
+                notes: {
+                    token_amount: addonTokens,
+                    user_email: email
+                },
+                
+                theme: {
+                    color: '#5c6ded'
+                },
+                
+                modal: {
+                    ondismiss: function() {
+                        console.log('Payment canceled by user');
+                        setAddonLoading(false);
+                        setAddonError('Payment canceled');
+                    }
+                }
+            });
+            
+            rzp.on('payment.failed', function (response) {
+                console.error('Payment failed:', response.error);
+                setAddonLoading(false);
+                setAddonError(response.error.description || 'Payment failed');
+                setModalState({
+                    type: 'error',
+                    title: 'Payment Failed',
+                    message: response.error.description || 'Payment could not be completed. Please try again.'
                 });
-                rzp.on('payment.failed', (failure) => {
-                    setAddonLoading(false);
-                    setModalState({
-                        type: 'error',
-                        title: 'Add-on purchase cancelled',
-                        message: failure.error?.description || 'Payment did not complete. You can try again anytime.'
-                    });
-                });
-                rzp.open();
-            } else {
-                setAddonError('Unexpected response from billing service. Please retry in a moment.');
-            }
+            });
+            
+            rzp.open();
+
         } catch (error) {
             console.error('Addon purchase failed', error);
             const message =
@@ -515,10 +642,9 @@ const Pricing = () => {
                 error.message ||
                 'Unable to purchase tokens right now.';
             setAddonError(message);
-        } finally {
             setAddonLoading(false);
         }
-    }, [addonTokens, ensureAuthenticated, prefetchInvoice, refreshTokens]);
+    }, [addonTokens, ensureAuthenticated, refreshTokens]);
 
     const handleInvoiceDownload = useCallback(
         async (txId) => {
@@ -560,11 +686,28 @@ const Pricing = () => {
 
     return (
         <div className="pricing-page">
+            {/* Show loader when processing payments */}
+            {(planLoading || addonLoading) && (
+                <Loader 
+                    fullScreen 
+                    message={planLoading ? "Processing plan upgrade..." : "Processing token purchase..."} 
+                    size="medium"
+                />
+            )}
+            
             {SIMULATION_ENABLED && (
                 <div className="pricing-simulation-banner">
                     Sandbox mode enabled – paid checkouts simulate token credits without charging your card.
                 </div>
             )}
+            <div className="back-home-container">
+                <button className="back-home-btn" onClick={() => navigate('/')} title="Back to Home">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" className="back-home-icon">
+                        <path d="M10 12L6 8L10 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                    <span className="back-home-text">Back to Home</span>
+            </button>
+            </div>
             <header className="pricing-hero">
                 <span className="pricing-hero__badge">Token-first pricing</span>
                 <h1 className="pricing-hero__title">Plans tuned for privacy automation</h1>
@@ -592,15 +735,13 @@ const Pricing = () => {
                             </span>
                             <span className="metrics-card__caption">
                                 Resets monthly • {tokenSummary?.token_period || 'current period'}
-                            </span>
+                        </span>
                         </div>
                     </div>
                 )}
             </header>
 
-            <div className="pricing-toggle">
-                <BillingToggle yearly={yearly} setYearly={setYearly} />
-            </div>
+            <BillingToggle defaultCycle={billingCycle} onBillingChange={handleBillingChange} />
 
             {planError && <div className="pricing-message pricing-message--error">{planError}</div>}
 
@@ -612,39 +753,45 @@ const Pricing = () => {
                             <span className="pricing-card__icon">{plan.icon}</span>
                             <h3 className="pricing-card__title">{plan.name}</h3>
                             <p className="pricing-card__caption">{plan.caption}</p>
-                        </div>
+                                </div>
                         {renderPrice(plan)}
                         <div className="pricing-card__tokens">
                             <span className="pricing-card__tokens-amount">{plan.tokens.headline}</span>
                             <span className="pricing-card__tokens-note">{plan.tokens.subline}</span>
-                        </div>
+                                    </div>
                         <ul className="pricing-card__features">
                             {plan.features.map((feature) => (
-                                <li key={feature}>{feature}</li>
-                            ))}
+                                <li key={feature}>
+                                    <span className="pricing-card__bullet" />
+                                            <span>{feature}</span>
+                                </li>
+                                    ))}
                         </ul>
                         {plan.limits.length > 0 && (
                             <ul className="pricing-card__limits">
                                 {plan.limits.map((limit) => (
-                                    <li key={limit}>{limit}</li>
-                                ))}
+                                    <li key={limit}>
+                                        <span className="pricing-card__bullet pricing-card__bullet--muted" />
+                                        <span>{limit}</span>
+                                    </li>
+                                        ))}
                             </ul>
-                        )}
+                                )}
                         <div className="pricing-card__cta">
-                            <button
+                                <button
                                 className={`pricing-button pricing-button--${plan.ctaVariant}`}
                                 onClick={() => handlePlanCheckout(plan)}
                                 disabled={planLoading === plan.id}
-                            >
+                                >
                                 {planLoading === plan.id ? 'Preparing checkout…' : plan.cta}
                                 <FiArrowRight />
-                            </button>
+                                </button>
                         </div>
                         <p className="pricing-card__meta">{plan.meta}</p>
-                    </div>
+                                    </div>
                 ))}
 
-                <div className="pricing-card pricing-card--addon">
+                <div className="pricing-card pricing-card--addon" id="addons">
                     <div className="pricing-card__header">
                         <span className="pricing-card__icon pricing-card__icon--addon">
                             <FiPlus />
@@ -653,7 +800,7 @@ const Pricing = () => {
                         <p className="pricing-card__caption">
                             Top up tokens on demand without touching your base subscription.
                         </p>
-                    </div>
+                            </div>
                     <div className="addon-card__body">
                         <label htmlFor="addonTokens" className="addon-card__label">
                             Tokens needed
@@ -682,53 +829,200 @@ const Pricing = () => {
                         <span>Total</span>
                         <strong>₹{addonTotal.toLocaleString('en-IN')}</strong>
                     </div>
-                    <button
-                        className="pricing-button pricing-button--primary"
-                        onClick={handleAddonPurchase}
-                        disabled={addonLoading}
-                    >
-                        {addonLoading ? 'Processing…' : 'Purchase tokens'}
-                        <FiArrowRight />
-                    </button>
-                    {addonError && <p className="pricing-card__error">{addonError}</p>}
+                    <div className="pricing-card__cta">
+                        <button
+                            className="pricing-button pricing-button--outline"
+                            onClick={handleAddonPurchase}
+                            disabled={addonLoading}
+                        >
+                            {addonLoading ? 'Processing…' : 'Purchase tokens'}
+                            <FiArrowRight />
+                        </button>
+                        {addonError && <p className="pricing-card__error">{addonError}</p>}
+                    </div>
                     <p className="pricing-card__meta">
                         Invoices are generated automatically. Tokens credit instantly once payment succeeds.
                     </p>
                 </div>
             </div>
 
+            <section className="pricing-how">
+                <div className="pricing-container">
+                    <h2 className="pricing-how__title">How to Choose the Right Plan</h2>
+                    <p className="pricing-how__subtitle">
+                        Select a plan based on your usage volume, team size, and feature requirements.
+                        </p>
+                    <div className="pricing-how__grid">
+                        <article className="pricing-how__card">
+                            <div className="pricing-how__icon">
+                                <FiUsers />
+                            </div>
+                            <div className="pricing-how__content">
+                                <h3>By Team Size &amp; Business Type</h3>
+                                <p>Evaluate your organisation’s scale and internal privacy needs.</p>
+                                <ul>
+                                    <li><strong>Starter:</strong> Ideal for individuals, founders, students, or small teams piloting privacy automation.</li>
+                                    <li><strong>Professional:</strong> Built for SMEs and fast-growing companies that require advanced analytics and premium support.</li>
+                                    <li><strong>Enterprise:</strong> Designed for large corporations, banks, insurers, and compliance teams needing concierge onboarding.</li>
+                                </ul>
+                            </div>
+                        </article>
+                        <article className="pricing-how__card">
+                            <div className="pricing-how__icon">
+                                <FiBarChart2 />
+                            </div>
+                            <div className="pricing-how__content">
+                                <h3>By Usage Volume &amp; Requirements</h3>
+                                <p>Match your monthly automation throughput with the right token pool.</p>
+                                <ul>
+                                    <li><strong>Starter:</strong> Perfect if you scan light daily volumes with uploads only (150 tokens/month).</li>
+                                    <li><strong>Professional:</strong> Great for recurring lock/unlock workflows and analytics (2000 tokens/month).</li>
+                                    <li><strong>Enterprise:</strong> Unlimited usage with log records, dedicated support, and bespoke integrations.</li>
+                                </ul>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </section>
+
+            <section className="pricing-comparison">
+                <div className="pricing-container">
+                    <div className="pricing-comparison__header">
+                        <h2>Plan Comparison</h2>
+                        <p>Compare allowance, premium features, and support tiers side-by-side.</p>
+                    </div>
+                    <div className="pricing-comparison__table-wrapper">
+                        <table className="pricing-comparison__table">
+                            <thead>
+                                <tr>
+                                    <th>Feature</th>
+                                    <th>Starter</th>
+                                    <th>Professional</th>
+                                    <th>Enterprise</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {[
+                                    {
+                                        feature: 'Monthly token allowance',
+                                        starter: '150 tokens (5/day refresh)',
+                                        professional: '2000 tokens',
+                                        enterprise: 'Unlimited tokens'
+                                    },
+                                    {
+                                        feature: 'Upload documents & images',
+                                        starter: true,
+                                        professional: true,
+                                        enterprise: true
+                                    },
+                                    {
+                                        feature: 'Lock JSON (5 tokens/run)',
+                                        starter: false,
+                                        professional: true,
+                                        enterprise: true
+                                    },
+                                    {
+                                        feature: 'Unlock / verify JSON (5 tokens/run)',
+                                        starter: false,
+                                        professional: true,
+                                        enterprise: true
+                                    },
+                                    {
+                                        feature: 'Advanced Analysis Board',
+                                        starter: false,
+                                        professional: true,
+                                        enterprise: true
+                                    },
+                                    {
+                                        feature: 'Token rollover / reset',
+                                        starter: 'Daily refresh up to 150/month',
+                                        professional: 'Resets monthly',
+                                        enterprise: 'Not required'
+                                    },
+                                    {
+                                        feature: 'Support',
+                                        starter: 'Email (48h SLA)',
+                                        professional: 'Priority email & chat',
+                                        enterprise: '24×7 concierge desk'
+                                    }
+                                ].map((row) => (
+                                    <tr key={row.feature}>
+                                        <td>{row.feature}</td>
+                                        {[row.starter, row.professional, row.enterprise].map((value, idx) => (
+                                            <td key={idx}>
+                                                {typeof value === 'boolean' ? (
+                                                    value ? (
+                                                        <FiCheckIcon className="pricing-comparison__check" />
+                                                    ) : (
+                                                        <FiX className="pricing-comparison__cross" />
+                                                    )
+                                                ) : (
+                                                    value
+                                                )}
+                                            </td>
+                                        ))}
+                                </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
             <section className="pricing-faq">
                 <div className="pricing-faq__header">
                     <h2>Token billing essentials</h2>
                     <p>Answers to the most common questions about the new token-based plans.</p>
-                </div>
+                    </div>
                 <div className="pricing-faq__grid">
-                    <article className="pricing-faq__item">
-                        <h3>How are tokens consumed?</h3>
-                        <p>
-                            Uploading a document or image consumes 1 token. Locking or unlocking JSON consumes 5 tokens. Enterprise plans enjoy
-                            unlimited usage with no deduction.
-                        </p>
-                    </article>
-                    <article className="pricing-faq__item">
-                        <h3>What happens when tokens run low?</h3>
-                        <p>
-                            We email alerts at 80% and 95% usage. You can instantly top up from the Add-on card or upgrade your plan—all without leaving the app.
-                        </p>
-                    </article>
-                    <article className="pricing-faq__item">
-                        <h3>Do tokens expire?</h3>
-                        <p>
-                            Starter tokens refresh daily up to 150 per month. Professional tokens reset monthly. Add-on tokens roll over until consumed.
-                        </p>
-                    </article>
-                    <article className="pricing-faq__item">
-                        <h3>Are invoices GST-compliant?</h3>
-                        <p>
-                            Yes. Every paid plan or add-on purchase generates a GST-compliant PDF invoice, ready to download from the success modal or your profile.
-                        </p>
-                    </article>
-                </div>
+                    {[
+                        {
+                            question: 'How are tokens consumed?',
+                            answer:
+                                'Uploads cost 1 token each. Locking or unlocking JSON deducts 5 tokens per run. Enterprise plans include unlimited usage.'
+                        },
+                        {
+                            question: 'Do tokens expire?',
+                            answer:
+                                'Starter tokens refresh daily up to 150 per month. Professional tokens reset monthly. Add-on tokens never expire until they are consumed.'
+                        },
+                        {
+                            question: 'Can I change plans later?',
+                            answer:
+                                'Yes. Upgrade or downgrade any time. New token balances apply immediately and existing tokens remain in your account.'
+                        },
+                        {
+                            question: 'What payment methods are supported?',
+                            answer:
+                                'Razorpay supports UPI, credit/debit cards, net banking, and bank transfers. Enterprise customers can also pay via invoice.'
+                        },
+                        {
+                            question: 'Are invoices GST compliant?',
+                            answer:
+                                'Every successful plan or add-on purchase generates a GST-ready PDF invoice with Razorpay transaction details.'
+                        },
+                        {
+                            question: 'Can teammates share the same tokens?',
+                            answer:
+                                'Yes. Tokens are pooled per workspace so every teammate draws from the same balance. Admins can monitor usage in the profile dashboard.'
+                        },
+                        {
+                            question: 'What happens if token deduction fails?',
+                            answer:
+                                'The action is paused and you’ll see an upgrade prompt. Top up tokens or upgrade your plan to continue without interruption.'
+                        },
+                        {
+                            question: 'Do add-on tokens roll over?',
+                            answer:
+                                'Add-on tokens never expire. They sit in your balance until you use them—great for seasonal bursts or audits.'
+                        }
+                    ].map((faq) => (
+                        <article className="pricing-faq__item" key={faq.question}>
+                            <h3>{faq.question}</h3>
+                            <p>{faq.answer}</p>
+                        </article>
+                    ))}
+                        </div>
             </section>
 
             <div className="pricing-contact">
@@ -736,8 +1030,8 @@ const Pricing = () => {
                     <h3>Need a bespoke token pool or enterprise paperwork?</h3>
                     <p>
                         Our team can help with volume discounts, procurement documents, custom SLAs, and dedicated onboarding for your organisation.
-                    </p>
-                </div>
+                            </p>
+                        </div>
                 <button
                     className="pricing-button pricing-button--outline"
                     onClick={() => navigate('/about#contact')}
@@ -745,7 +1039,7 @@ const Pricing = () => {
                     Contact sales
                     <FiArrowRight />
                 </button>
-            </div>
+                        </div>
 
             <Footer />
 
@@ -784,7 +1078,7 @@ const Pricing = () => {
                             <div className="pricing-modal__meta">
                                 <span>Payment ID</span>
                                 <code>{modalState.paymentId}</code>
-                            </div>
+                        </div>
                         )}
                         {modalState.tokensGranted && modalState.tokensGranted > 0 && (
                             <div className="pricing-modal__badge">+{modalState.tokensGranted.toLocaleString('en-IN')} tokens</div>
@@ -811,7 +1105,7 @@ const Pricing = () => {
                                     View tokens in profile
                                     <FiArrowRight />
                                 </button>
-                            </div>
+                        </div>
                         )}
                         {invoiceError && <p className="pricing-modal__error">{invoiceError}</p>}
                     </div>

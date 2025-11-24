@@ -130,6 +130,8 @@ const Signup = ({ onSuccess, onBackHome }) => {
                 }
                 if (response.user) {
                     localStorage.setItem('userInfo', JSON.stringify(response.user));
+                    // Trigger token account refresh
+                    window.dispatchEvent(new CustomEvent('user-logged-in'));
                 }
                 const welcomeName = response.user?.fullName || response.user?.username || response.user?.email || 'Explorer';
                 setError('');
@@ -458,6 +460,8 @@ const Signup = ({ onSuccess, onBackHome }) => {
                 }
                 if (response.user) {
                     localStorage.setItem('userInfo', JSON.stringify(response.user));
+                    // Trigger token account refresh
+                    window.dispatchEvent(new CustomEvent('user-logged-in'));
                 }
                 const welcomeName = response.user?.fullName || response.user?.name || formatPhoneForDisplay({ dialCode: phoneDescriptor.dialCode, mobile: mobileDigits });
                 setSuccessMessage(`Welcome back, ${welcomeName}!`);
@@ -519,6 +523,8 @@ const Signup = ({ onSuccess, onBackHome }) => {
                 // Store user info
                 if (response.user) {
                     localStorage.setItem('userInfo', JSON.stringify(response.user));
+                    // Trigger token account refresh
+                    window.dispatchEvent(new CustomEvent('user-logged-in'));
                 }
 
                 // Show success message

@@ -25,6 +25,8 @@ function Verification() {
   const [error, setError] = useState(null);
   const { tokenAccount, featuresEnabled, refresh: refreshTokenAccount, loading: tokensLoading } = useTokenAccount();
   const [upgradePrompt, setUpgradePrompt] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const piiPerPage = 10;
 
   const getStoredUser = () => {
     if (typeof window === 'undefined') {
@@ -80,6 +82,7 @@ function Verification() {
 
   const handlePiiTypeClick = (type) => {
     setSelectedPiiType(selectedPiiType === type ? null : type);
+    setCurrentPage(1); // Reset to first page when selecting new type
   };
 
   const handleDecryptJson = async () => {
@@ -113,7 +116,7 @@ function Verification() {
       ({ snapshot, isUnlimited, balance } = computeTokenBudget());
     }
 
-    const tokenCost = 5;
+    const tokenCost = 50;
     if (!isUnlimited && balance < tokenCost) {
       setUpgradePrompt({
         feature: 'unlock_json',
@@ -125,41 +128,43 @@ function Verification() {
     setDecryptingJson(true);
     setError(null);
 
-    let consumedTokens = false;
-
     try {
-      if (!isUnlimited) {
-        await consumeTokenAction({
-          action: 'unlock_json',
-          userEmail: user.email,
-          metadata: {
-            filename: jsonFile.name,
-            size: jsonFile.size
-          }
-        });
-        consumedTokens = true;
-      }
-
+      // FIRST: Try to decrypt the JSON file
       const response = await decryptJson(jsonFile, jsonPassword);
 
       if (response.success) {
+        // SUCCESS: Decryption worked, now track token usage (even for unlimited)
+        try {
+          await consumeTokenAction({
+            action: 'unlock_json',
+            userEmail: user.email,
+            metadata: {
+              filename: jsonFile.name,
+              size: jsonFile.size
+            }
+          });
+          
+          // Refresh token balance after tracking
+          if (typeof refreshTokenAccount === 'function') {
+            await refreshTokenAccount();
+          }
+        } catch (tokenErr) {
+          console.error('Token tracking failed after successful unlock:', tokenErr);
+          // Don't fail the operation if token tracking fails
+        }
+        
         setDecryptedJsonData(response.data);
       } else {
-        setError(response.error || 'Decryption failed');
-      }
-
-      if (consumedTokens && typeof refreshTokenAccount === 'function') {
-        await refreshTokenAccount();
+        // FAILURE: Decryption failed, DON'T deduct tokens
+        setError(response.error || 'Decryption failed - incorrect password or corrupted file');
       }
     } catch (err) {
-      if (consumedTokens && typeof refreshTokenAccount === 'function') {
-        await refreshTokenAccount();
-      }
+      // FAILURE: Error occurred, DON'T deduct tokens
       const serverMessage = err.response?.data?.error || err.message || '';
-      if (!consumedTokens && typeof serverMessage === 'string' && serverMessage.toUpperCase().includes('INSUFFICIENT')) {
+      if (typeof serverMessage === 'string' && serverMessage.toUpperCase().includes('PLAN_RESTRICTION')) {
         setUpgradePrompt({
           feature: 'unlock_json',
-          description: 'You need at least 5 tokens to unlock a JSON file. Please top up your balance or upgrade your plan.'
+          description: 'Unlocking JSON files is only available on Professional and Enterprise plans. Please upgrade to use this feature.'
         });
       }
       setError(serverMessage || 'Decryption failed. Please check your password.');
@@ -377,25 +382,82 @@ function Verification() {
                     </tr>
                   </thead>
                   <tbody>
-                    {decryptedJsonData.piis[selectedPiiType].map((value, index) => (
-                      <tr key={index}>
-                        <td>{value}</td>
-                      </tr>
-                    ))}
+                    {decryptedJsonData.piis[selectedPiiType]
+                      .slice((currentPage - 1) * piiPerPage, currentPage * piiPerPage)
+                      .map((value, index) => (
+                        <tr key={index}>
+                          <td>{value}</td>
+                        </tr>
+                      ))}
                   </tbody>
                 </table>
+                
+                {/* Pagination */}
+                {decryptedJsonData.piis[selectedPiiType].length > piiPerPage && (
+                  <div className="pagination">
+                    <button
+                      className="pagination-btn"
+                      onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      ← Previous
+                    </button>
+                    <span className="pagination-info">
+                      Page {currentPage} of {Math.ceil(decryptedJsonData.piis[selectedPiiType].length / piiPerPage)}
+                      {' '}
+                      ({decryptedJsonData.piis[selectedPiiType].length} total)
+                    </span>
+                    <button
+                      className="pagination-btn"
+                      onClick={() => setCurrentPage(prev => 
+                        Math.min(Math.ceil(decryptedJsonData.piis[selectedPiiType].length / piiPerPage), prev + 1)
+                      )}
+                      disabled={currentPage >= Math.ceil(decryptedJsonData.piis[selectedPiiType].length / piiPerPage)}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
             <div className="decrypted-downloads">
               <h3>Download Unlocked JSON File</h3>
-              <button
-                className="btn-download btn-download-all"
-                onClick={handleDownloadUnlockedJson}
-                title="Download unlocked JSON file"
-              >
-                Download Unlocked JSON File
-              </button>
+              <div style={{ textAlign: 'center' }}>
+                <button
+                  className="btn-download btn-download-all"
+                  onClick={handleDownloadUnlockedJson}
+                  title="Download unlocked JSON file"
+                  style={{
+                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                    color: 'white',
+                    padding: '14px 32px',
+                    fontSize: '15px',
+                    fontWeight: '600',
+                    borderRadius: '25px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease',
+                    boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                    whiteSpace: 'nowrap',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '8px',
+                    width: 'auto'
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.transform = 'translateY(-2px)';
+                    e.target.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.5)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = 'translateY(0)';
+                    e.target.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4)';
+                  }}
+                >
+                  Download Unlocked JSON File
+                </button>
+              </div>
             </div>
           </div>
         )}

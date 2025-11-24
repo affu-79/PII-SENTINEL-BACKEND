@@ -12,8 +12,18 @@ import UseCases from './UseCases';
 import HowItWorks from './HowItWorks';
 import AccountDeleted from './AccountDeleted';
 import About from './pages/About';
+import OfflinePage from './components/OfflinePage';
+import InvoiceHistoryPage from './components/InvoiceHistoryPage';
+import { useNetworkStatus } from './hooks/useNetworkStatus';
 
 function App() {
+  const { showOfflinePage } = useNetworkStatus();
+
+  // Show offline page if network connection is lost
+  if (showOfflinePage) {
+    return <OfflinePage />;
+  }
+
   return (
     <Router>
       <Routes>
@@ -25,6 +35,7 @@ function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/create-account" element={<CreateAccount />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/invoice-history" element={<InvoiceHistoryPage />} />
         <Route path="/features" element={<Features />} />
         <Route path="/usecases" element={<UseCases />} />
         <Route path="/howitworks" element={<HowItWorks />} />

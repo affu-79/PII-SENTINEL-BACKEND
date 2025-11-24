@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FiArrowRight, FiBarChart2, FiLock, FiRefreshCcw, FiUnlock } from 'react-icons/fi';
-import { getProfile, updateProfile, getUserActivityLog } from './api';
+import { getProfile, updateProfile, getUserActivityLog, fetchUserActivity } from './api';
 import ScrollButton from './components/ScrollButton';
 import Footer from './components/Footer';
 import SettingsSection from './components/SettingsSection';
+import PaymentHistory from './components/PaymentHistory';
 import useTokenAccount from './hooks/useTokenAccount';
 import './Profile.css';
 
@@ -95,19 +96,25 @@ const Profile = () => {
                     setStats(response.stats);
                     setError(''); // Clear any previous errors
 
-                    // Calculate account strength
-                    const strength = calculateAccountStrength(response.user);
-                    setAccountStrength(strength);
-
-                    // Fetch activity log
+                    // Calculate account strength and fetch real activity data
                     const userId = response.user.email || response.user.username || response.user.mobile;
                     if (userId) {
-                        const activity = await getUserActivityLog(userId);
-                        setActivityLog({
-                            lastLogin: response.user.lastLogin || response.user.updated_at || null,
-                            lastBatchCreated: activity.lastBatchCreated,
-                            lastPiiScanCompleted: activity.lastPiiScanCompleted
-                        });
+                        try {
+                            const activityResponse = await fetchUserActivity(userId);
+                            if (activityResponse && activityResponse.success) {
+                                setActivityLog({
+                                    lastLogin: activityResponse.activity.lastLogin,
+                                    lastBatchCreated: activityResponse.activity.lastBatchCreated,
+                                    lastPiiScanCompleted: activityResponse.activity.lastPiiScanCompleted
+                                });
+                                setAccountStrength(activityResponse.accountStrength);
+                            }
+                        } catch (activityErr) {
+                            console.error('Error fetching activity:', activityErr);
+                            // Fallback to calculated strength
+                            const strength = calculateAccountStrength(response.user);
+                            setAccountStrength(strength);
+                        }
                     }
                 } else {
                     const errorMsg = response?.error || 'Failed to load profile';
@@ -124,6 +131,45 @@ const Profile = () => {
         };
 
         fetchProfile();
+    }, []);
+    
+    // Listen for user login events to refetch profile
+    useEffect(() => {
+        const handleUserLoggedIn = () => {
+            console.log('Profile - User logged in event detected, refetching profile...');
+            const userInfo = localStorage.getItem('userInfo');
+            if (userInfo) {
+                // Fetch fresh profile data after login
+                setTimeout(() => {
+                    setLoading(true);
+                    const userData = JSON.parse(userInfo);
+                    getProfile(userData.username || null, userData.email || null)
+                        .then(response => {
+                            if (response && response.success) {
+                                const initializedData = initializeUserData(response.user);
+                                setUser(response.user);
+                                setEditedUser(initializedData);
+                                setStats(response.stats);
+                                console.log('Profile refreshed with:', {
+                                    plan_id: response.user.plan_id,
+                                    google_id: response.user.google_id,
+                                    is_google_user: response.user.is_google_user
+                                });
+                            }
+                            setLoading(false);
+                        })
+                        .catch(err => {
+                            console.error('Error refreshing profile:', err);
+                            setLoading(false);
+                        });
+                }, 500);
+            }
+        };
+        
+        window.addEventListener('user-logged-in', handleUserLoggedIn);
+        return () => {
+            window.removeEventListener('user-logged-in', handleUserLoggedIn);
+        };
     }, []);
 
     // Calculate account strength based on user data
@@ -206,7 +252,7 @@ const Profile = () => {
     };
 
     const handleSupport = () => {
-        window.open('mailto:support@piisentinel.com', '_blank');
+        navigate('/about#contact');
     };
 
     const handleRefreshTokens = () => {
@@ -1467,6 +1513,9 @@ const Profile = () => {
                         </div>
                     </div>
                 </div>
+
+                {/* Payment History Section */}
+                <PaymentHistory userEmail={user?.email} />
 
                 {/* Settings Section */}
                 <SettingsSection user={user} onUserUpdate={(updatedUser) => {

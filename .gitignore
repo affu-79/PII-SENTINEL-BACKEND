@@ -19,10 +19,19 @@ build/
 # Environment variables
 .env
 .env.local
+.env.production  # Template file, keep for reference
 
 # Data directories
 data/
 *.log
+logs/
+
+# Backend specific
+backend/data/
+backend/logs/
+backend/*.log
+backend/detection.log
+backend/gunicorn.pid
 
 # IDE
 .vscode/
@@ -50,4 +59,25 @@ frontend/.env.production.local
 *.tmp
 *.temp
 *.bak
+
+# Backend temporary files
+backend/temp_reports/
+backend/temp_charts/
+backend/data/uploads/*
+backend/data/masked/*
+backend/data/results/*
+backend/data/invoices/*
+!backend/data/uploads/.gitkeep
+!backend/data/masked/.gitkeep
+!backend/data/results/.gitkeep
+!backend/data/invoices/.gitkeep
+
+# Test files
+backend/test_*.py
+backend/*_test.py
+backend/fix_*.py
+backend/check_*.py
+backend/inspect_*.py
+backend/clear_*.py
+backend/test_*.png
 

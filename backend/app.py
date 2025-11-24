@@ -7,8 +7,11 @@ import uuid
 import logging
 import random
 import time
+import zipfile
+from typing import Optional
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, send_file
+from typing import Dict, Any, Tuple
+from flask import Flask, request, jsonify, send_file, make_response
 import bcrypt
 import json
 import base64
@@ -21,7 +24,22 @@ import threading
 from functools import wraps
 from concurrent.futures import ThreadPoolExecutor
 from cachetools import cached, TTLCache
-from typing import Optional, Dict, Any
+import requests
+
+# Create a cache instance for profile endpoint that we can clear
+profile_cache = TTLCache(maxsize=100, ttl=2)
+
+def invalidate_profile_cache(user_email=None):
+    """Clear the profile cache for a specific user or all users."""
+    try:
+        if user_email:
+            # Clear specific user's cache entry
+            profile_cache.pop(user_email, None)
+        else:
+            # Clear entire cache
+            profile_cache.clear()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Failed to invalidate profile cache: {e}")
 
 # Load environment variables FIRST before importing modules that need them
 load_dotenv()
@@ -78,7 +96,6 @@ from utils import (
     save_json, load_json, create_zip, get_timestamp, ensure_dir,
     sanitize_filename, is_pdf_file, is_docx_file, is_doc_file, is_image_file, is_text_file
 )
-from payments import RazorpayService, RazorpayNotConfigured, RazorpaySignatureError, InvoiceService
 
 # Import security middleware
 try:
@@ -99,7 +116,70 @@ except ImportError:
     def validate_path(path):
         return True
 
-# Configure logging
+# ------------------------------------------------------------
+# Pricing / Token configuration
+# ------------------------------------------------------------
+
+PLAN_CATALOG: Dict[str, Dict[str, Any]] = {
+    "starter": {
+        "id": "starter",
+        "name": "Starter",
+        "price_inr": 0,
+        "price_inr_yearly": 0,
+        "monthly_tokens": 150,
+        "features": {
+            "export_json": False,
+            "lock_json": False,
+            "unlock_json": False,
+            "advanced_analysis": False,
+            "log_records": False
+        }
+    },
+    "professional": {
+        "id": "professional",
+        "name": "Professional",
+        "price_inr": 999,  # Monthly
+        "price_inr_yearly": 9950,  # Yearly (₹829/month, 17% savings)
+        "monthly_tokens": 2000,
+        "features": {
+            "export_json": True,
+            "lock_json": True,
+            "unlock_json": True,
+            "advanced_analysis": True,
+            "log_records": False
+        }
+    },
+    "enterprise": {
+        "id": "enterprise",
+        "name": "Enterprise",
+        "price_inr": 4999,  # Monthly
+        "price_inr_yearly": 49790,  # Yearly (₹4,149/month, 17% savings)
+        "monthly_tokens": None,  # Unlimited
+        "features": {
+            "export_json": True,
+            "lock_json": True,
+            "unlock_json": True,
+            "advanced_analysis": True,
+            "log_records": True
+        }
+    }
+}
+
+TOKEN_ACTION_COSTS: Dict[str, int] = {
+    "lock_json": 50,
+    "unlock_json": 50,
+    "download_masked_file": 5
+}
+
+ADDON_TOKEN_PRICE_INR = 1
+
+# Configure plan catalogue inside mongo client (used for token accounting)
+mongo_client.configure_plans(PLAN_CATALOG)
+
+# ------------------------------------------------------------
+# Logging configuration
+# ------------------------------------------------------------
+
 log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 logging.basicConfig(
     level=getattr(logging, log_level, logging.INFO),
@@ -108,6 +188,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# SECURITY: Set Flask secret key for session management
+app.secret_key = os.getenv('FLASK_SECRET', os.urandom(32))
 
 # Wrap Flask app with middleware that handles multipart requests better
 original_wsgi_app = app.wsgi_app
@@ -204,13 +287,6 @@ app.config['MASKED_FOLDER'] = os.path.join(storage_path, 'masked')
 ensure_dir(app.config['UPLOAD_FOLDER'])
 ensure_dir(app.config['RESULTS_FOLDER'])
 ensure_dir(app.config['MASKED_FOLDER'])
-
-invoice_service = InvoiceService(os.path.join(storage_path, 'invoices'))
-razorpay_service = RazorpayService.from_env()
-if razorpay_service.enabled:
-    logger.info("✓ Razorpay integration enabled")
-else:
-    logger.warning("Razorpay not configured. Paid flows will require simulation mode until keys are provided.")
 
 # In-memory job storage (for real-time processing)
 # Use thread-safe dict for concurrent access
@@ -328,474 +404,80 @@ def require_auth(f):
     return decorated_function
 
 
-def _resolve_user(identifier: Optional[str]):
-    if not identifier:
-        return None, None
-    user = mongo_client.find_user(identifier)
-    if not user:
-        return None, None
-    email = user.get('email')
-    if not email:
-        return None, user
-    return email, user
-
-
-def _ensure_token_state(email: Optional[str]):
-    if not email:
-        return None
-    mongo_client.ensure_user_token_document(email)
-    mongo_client.maybe_reset_plan_tokens(email)
-    return mongo_client.get_token_summary(email)
-
-
-def _serialize_token_summary(summary: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if summary is None:
-        return None
-    payload = dict(summary)
-    plan_id = payload.get('plan_id')
-    plan = PLAN_CATALOG.get(plan_id, {})
-    if isinstance(payload.get('last_token_reset'), datetime):
-        payload['last_token_reset'] = payload['last_token_reset'].isoformat()
-    if isinstance(payload.get('subscription'), dict):
-        sub = payload['subscription']
-        for key in ['activated_at', 'expires_at', 'current_period_end', 'current_period_start']:
-            if isinstance(sub.get(key), datetime):
-                sub[key] = sub[key].isoformat()
-    if payload.get('tokens_total') is None and plan.get('monthly_tokens') is None:
-        payload['tokens_total'] = 'unlimited'
-    if payload.get('tokens_balance') is None and plan.get('monthly_tokens') is None:
-        payload['tokens_balance'] = 'unlimited'
-    payload['plan_details'] = {
-        'id': plan.get('id', plan_id),
-        'name': plan.get('name', plan_id.title() if plan_id else None),
-        'price_inr': plan.get('price_inr'),
-        'monthly_tokens': plan.get('monthly_tokens'),
-        'features': plan.get('features')
-    }
-    return payload
-
-
-def _build_invoice_user_info(email: str, user: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        'email': email,
-        'name': user.get('fullName') or user.get('username') or email,
-        'company': user.get('company') or user.get('companyName'),
-        'phone': user.get('phoneNumber') or user.get('phone')
-    }
-
-
-def _process_razorpay_payment(payment: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
-    payment_id = payment.get('id')
-    order_id = payment.get('order_id')
-    amount_paise = payment.get('amount') or 0
-    amount_inr = float(amount_paise) / 100.0
-    currency = payment.get('currency', 'INR')
-    notes = payment.get('notes') or {}
-    order_type = (notes.get('order_type') or 'plan').lower()
-    user_identifier = notes.get('user_id') or notes.get('email')
-
-    logger.info(
-        "Processing Razorpay payment event",
-        extra={'payment_id': payment_id, 'order_type': order_type, 'user_identifier': user_identifier}
-    )
-
-    email, user = _resolve_user(user_identifier)
-    if user is None or not email:
-        logger.error("Unable to resolve user for Razorpay payment", extra={'payment_id': payment_id})
-        return {'status': 'failed', 'reason': 'user_not_found', 'payment_id': payment_id}
-
-    if mongo_client.has_token_transaction_for_payment(payment_id):
-        logger.info("Payment already processed, skipping duplicate ledger entry", extra={'payment_id': payment_id})
-        return {'status': 'duplicate', 'payment_id': payment_id}
-
-    _ensure_token_state(email)
-
-    metadata = {
-        'razorpay_payment_id': payment_id,
-        'razorpay_order_id': order_id,
-        'notes': notes,
-        'event': event.get('event')
-    }
-
-    purchase_summary = {
-        'type': 'Plan Subscription' if order_type != 'addon' else 'Add-on Tokens',
-        'tokens': None,
-        'name': None,
-        'details': None
-    }
-
-    tokens_granted: Optional[Any] = None
-    try:
-        if order_type == 'addon':
-            tokens_requested = int(notes.get('tokens_requested') or 0)
-            if tokens_requested <= 0:
-                logger.error("Invalid token quantity in Razorpay notes", extra={'payment_id': payment_id})
-                return {'status': 'failed', 'reason': 'invalid_tokens', 'payment_id': payment_id}
-            mongo_client.credit_tokens(email, tokens_requested, 'addon_purchase', {**metadata, 'source': 'razorpay'})
-            tokens_granted = tokens_requested
-            purchase_summary.update({
-                'name': 'Token Top-up',
-                'tokens': tokens_requested,
-                'details': f"Add-on tokens purchased: {tokens_requested}"
-            })
-        else:
-            plan_id = notes.get('plan_id') or notes.get('plan')
-            if not plan_id:
-                logger.error("Plan ID missing in Razorpay notes", extra={'payment_id': payment_id})
-                return {'status': 'failed', 'reason': 'plan_missing', 'payment_id': payment_id}
-            plan = PLAN_CATALOG.get(plan_id)
-            if not plan:
-                logger.error("Unknown plan in Razorpay notes", extra={'payment_id': payment_id, 'plan_id': plan_id})
-                return {'status': 'failed', 'reason': 'plan_invalid', 'payment_id': payment_id}
-            mongo_client.ensure_user_token_document(email)
-            mongo_client.assign_plan(email, plan_id, {**metadata, 'source': 'razorpay'})
-            tokens_granted = plan.get('monthly_tokens', 'unlimited')
-            purchase_summary.update({
-                'name': plan.get('name', plan_id.title()),
-                'tokens': tokens_granted,
-                'details': f"Plan upgraded to {plan.get('name', plan_id)}"
-            })
-    except Exception as exc:
-        logger.error("Error applying Razorpay payment", exc_info=True, extra={'payment_id': payment_id})
-        return {'status': 'failed', 'reason': 'processing_error', 'payment_id': payment_id, 'error': str(exc)}
-
-    invoice_payload = {
-        'transaction_id': payment_id,
-        'order_id': order_id,
-        'amount_inr': amount_inr,
-        'currency': currency,
-        'razorpay_payment_id': payment_id,
-        'razorpay_order_id': order_id,
-        'notes': notes,
-        'timestamp': datetime.utcnow(),
-        'user': _build_invoice_user_info(email, user),
-        'purchase': purchase_summary
-    }
-
-    invoice_payload['metadata'] = {
-        'purchase': purchase_summary,
-        'notes': notes,
-        'amount_inr': amount_inr,
-        'currency': currency
-    }
-
-    file_path = None
-    if invoice_service:
-        try:
-            file_path = invoice_service.generate(invoice_payload)
-            invoice_payload['file_path'] = file_path
-            invoice_payload['download_url'] = f"/api/invoice/{payment_id}"
-        except Exception:
-            logger.error("Failed to generate invoice PDF", exc_info=True, extra={'payment_id': payment_id})
-
-    mongo_client.store_invoice_metadata(email, invoice_payload)
-
-    logger.info("Razorpay payment processed successfully", extra={'payment_id': payment_id})
-    return {
-        'status': 'processed',
-        'payment_id': payment_id,
-        'order_type': order_type,
-        'tokens_granted': tokens_granted,
-        'invoice_path': file_path
-    }
-
-
 @app.route('/api/health', methods=['GET'])
 def health():
-    """Health check endpoint."""
-    mongo_status = mongo_client.get_connection_status()
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': get_timestamp(),
-        'mongodb': mongo_status
-    })
-
-
-@app.route('/api/user/tokens', methods=['GET'])
-@require_api_key
-@require_auth
-def get_user_tokens():
-    user_identifier = request.args.get('user_id') or request.args.get('email')
-    email, user = _resolve_user(user_identifier)
-    if user is None:
-        logger.warning(f"Tokens requested for unknown user: {user_identifier}")
-        return jsonify({'error': 'User not found', 'code': 'USER_NOT_FOUND'}), 404
-    if not email:
-        return jsonify({'error': 'User record missing email address for billing', 'code': 'USER_EMAIL_MISSING'}), 422
-
-    summary = _ensure_token_state(email)
-    serialized = _serialize_token_summary(summary)
-    return jsonify({
-        'user_id': email,
-        'tokens': serialized
-    })
-
-
-@app.route('/api/action/consume-token', methods=['POST'])
-@require_api_key
-@require_auth
-def consume_token():
-    data = request.get_json(force=True, silent=True) or {}
-    user_identifier = data.get('user_id') or data.get('email')
-    action = data.get('action')
-    metadata = data.get('metadata') or {}
-
-    if not action:
-        return jsonify({'error': 'Action is required', 'code': 'ACTION_REQUIRED'}), 400
-    action_cost = TOKEN_ACTION_COSTS.get(action)
-    if action_cost is None:
-        return jsonify({'error': f'Unsupported action: {action}', 'code': 'ACTION_UNSUPPORTED'}), 400
-
-    email, user = _resolve_user(user_identifier)
-    if user is None:
-        return jsonify({'error': 'User not found', 'code': 'USER_NOT_FOUND'}), 404
-    if not email:
-        return jsonify({'error': 'User record missing email address for billing', 'code': 'USER_EMAIL_MISSING'}), 422
-
-    summary = _ensure_token_state(email)
-    features = (summary or {}).get('features_enabled', {})
-    if action in ('lock_json', 'unlock_json') and not features.get(action, False):
-        return jsonify({'error': 'Feature not enabled for current plan', 'code': 'FEATURE_NOT_AVAILABLE'}), 403
-
-    debit_result = mongo_client.debit_tokens(email, action_cost, action, metadata)
-    if not debit_result.get('success'):
-        error_code = debit_result.get('error', 'TOKEN_ERROR')
-        status_code = 402 if error_code == 'INSUFFICIENT_TOKENS' else 400
-        return jsonify({'error': error_code, 'code': error_code}), status_code
-
-    updated_summary = _serialize_token_summary(mongo_client.get_token_summary(email))
-    return jsonify({
-        'success': True,
-        'action': action,
-        'tokens_consumed': action_cost,
-        'unlimited': debit_result.get('unlimited', False),
-        'tokens': updated_summary
-    })
-
-
-@app.route('/api/purchase/addons', methods=['POST'])
-@require_api_key
-@require_auth
-def purchase_addons():
-    data = request.get_json(force=True, silent=True) or {}
-    user_identifier = data.get('user_id') or data.get('email')
-    tokens_requested = int(data.get('tokens') or data.get('tokens_requested') or 0)
-    simulate = bool(data.get('simulate'))
-
-    if tokens_requested <= 0:
-        return jsonify({'error': 'tokens must be greater than zero', 'code': 'INVALID_TOKEN_REQUEST'}), 400
-
-    email, user = _resolve_user(user_identifier)
-    if user is None:
-        return jsonify({'error': 'User not found', 'code': 'USER_NOT_FOUND'}), 404
-    if not email:
-        return jsonify({'error': 'User record missing email address for billing', 'code': 'USER_EMAIL_MISSING'}), 422
-
-    amount_inr = tokens_requested * ADDON_TOKEN_PRICE_INR
-    _ensure_token_state(email)
-
-    if simulate:
-        if not PAYMENT_SIMULATION_ENABLED:
-            return jsonify({'error': 'Simulation disabled', 'code': 'SIMULATION_DISABLED'}), 403
-        mongo_client.credit_tokens(email, tokens_requested, 'addon_purchase', {'mode': 'simulate'})
-        updated_summary = _serialize_token_summary(mongo_client.get_token_summary(email))
-        return jsonify({
-            'status': 'credited',
-            'tokens_added': tokens_requested,
-            'amount_inr': amount_inr,
-            'tokens': updated_summary,
-            'simulate': True
-        })
-
-    if not razorpay_service or not razorpay_service.enabled:
-        logger.error("Razorpay not configured for add-on purchase")
-        return jsonify({
-            'error': 'RAZORPAY_NOT_CONFIGURED',
-            'message': 'Razorpay keys are not configured on the server. Enable simulation mode or configure keys.',
-            'can_simulate': PAYMENT_SIMULATION_ENABLED
-        }), 503
-
-    notes = {
-        'user_id': email,
-        'order_type': 'addon',
-        'tokens_requested': str(tokens_requested)
-    }
-
+    """
+    Health check endpoint for monitoring.
+    Returns detailed system status for Render health checks.
+    """
     try:
-        order_details = razorpay_service.create_order(
-            amount_inr=amount_inr,
-            receipt=f"addon_{email}_{int(time.time())}",
-            notes=notes
+        # Check MongoDB connection
+        mongo_status = mongo_client.get_connection_status()
+        
+        # Check disk space
+        import shutil
+        storage_path = app.config.get('UPLOAD_FOLDER', './data')
+        try:
+            disk_usage = shutil.disk_usage(storage_path)
+            disk_free_gb = disk_usage.free / (1024 ** 3)
+            disk_total_gb = disk_usage.total / (1024 ** 3)
+            disk_percent = (disk_usage.used / disk_usage.total) * 100
+        except:
+            disk_free_gb = None
+            disk_total_gb = None
+            disk_percent = None
+        
+        # System info
+        import psutil
+        try:
+            cpu_percent = psutil.cpu_percent(interval=0.1)
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+        except:
+            cpu_percent = None
+            memory_percent = None
+        
+        # Overall health status
+        is_healthy = (
+            mongo_status.get('connected', False) and
+            (disk_percent is None or disk_percent < 95) and
+            (memory_percent is None or memory_percent < 90)
         )
-    except Exception as exc:
-        logger.error("Failed to create Razorpay order for add-on purchase", exc_info=True)
-        return jsonify({'error': 'RAZORPAY_ORDER_FAILED', 'message': str(exc)}), 502
-
-    return jsonify({
-        'status': 'pending_payment',
-        'tokens_requested': tokens_requested,
-        'amount_inr': amount_inr,
-        'razorpay': {
-            'order_id': order_details.order_id,
-            'amount': order_details.amount,
-            'currency': order_details.currency,
-            'key': order_details.key,
-            'notes': order_details.notes
-        }
-    }), 202
-
-
-@app.route('/api/purchase/plan', methods=['POST'])
-@require_api_key
-@require_auth
-def purchase_plan():
-    data = request.get_json(force=True, silent=True) or {}
-    user_identifier = data.get('user_id') or data.get('email')
-    plan_id = data.get('plan_id')
-    simulate = bool(data.get('simulate'))
-
-    if not plan_id or plan_id not in PLAN_CATALOG:
-        return jsonify({'error': 'Invalid plan_id', 'code': 'INVALID_PLAN'}), 400
-
-    plan = PLAN_CATALOG[plan_id]
-    email, user = _resolve_user(user_identifier)
-    if user is None:
-        return jsonify({'error': 'User not found', 'code': 'USER_NOT_FOUND'}), 404
-    if not email:
-        return jsonify({'error': 'User record missing email address for billing', 'code': 'USER_EMAIL_MISSING'}), 422
-
-    _ensure_token_state(email)
-
-    if plan['price_inr'] == 0 or simulate:
-        if simulate and not PAYMENT_SIMULATION_ENABLED:
-            return jsonify({'error': 'Simulation disabled', 'code': 'SIMULATION_DISABLED'}), 403
-        mongo_client.ensure_user_token_document(email)
-        mongo_client.assign_plan(email, plan_id, {'mode': 'simulate' if simulate else 'plan_purchase'})
-        updated_summary = _serialize_token_summary(mongo_client.get_token_summary(email))
-        return jsonify({
-            'status': 'activated',
-            'plan_id': plan_id,
-            'plan_name': plan['name'],
-            'tokens': updated_summary,
-            'simulate': simulate,
-            'user': {
-                'email': email,
-                'features_enabled': updated_summary.get('features_enabled') if updated_summary else {}
+        
+        response = {
+            'status': 'healthy' if is_healthy else 'degraded',
+            'timestamp': get_timestamp(),
+            'version': '1.0.0',
+            'environment': os.getenv('FLASK_ENV', 'development'),
+            'checks': {
+                'mongodb': {
+                    'status': 'connected' if mongo_status.get('connected') else 'disconnected',
+                    'details': mongo_status
+                },
+                'disk': {
+                    'status': 'ok' if (disk_percent is None or disk_percent < 90) else 'warning',
+                    'free_gb': round(disk_free_gb, 2) if disk_free_gb else None,
+                    'total_gb': round(disk_total_gb, 2) if disk_total_gb else None,
+                    'used_percent': round(disk_percent, 2) if disk_percent else None
+                },
+                'system': {
+                    'cpu_percent': round(cpu_percent, 2) if cpu_percent else None,
+                    'memory_percent': round(memory_percent, 2) if memory_percent else None
+                }
             }
-        })
-
-    if not razorpay_service or not razorpay_service.enabled:
-        logger.error("Razorpay not configured for plan purchase")
-        return jsonify({
-            'error': 'RAZORPAY_NOT_CONFIGURED',
-            'message': 'Razorpay keys are not configured on the server. Enable simulation mode or configure keys.',
-            'can_simulate': PAYMENT_SIMULATION_ENABLED
-        }), 503
-
-    amount_inr = plan['price_inr']
-    notes = {
-        'user_id': email,
-        'plan_id': plan_id,
-        'order_type': 'plan'
-    }
-
-    try:
-        order_details = razorpay_service.create_order(
-            amount_inr=amount_inr,
-            receipt=f"plan_{plan_id}_{int(time.time())}",
-            notes=notes
-        )
-    except Exception as exc:
-        logger.error("Failed to create Razorpay order for plan purchase", exc_info=True)
-        return jsonify({'error': 'RAZORPAY_ORDER_FAILED', 'message': str(exc)}), 502
-
-    return jsonify({
-        'status': 'pending_payment',
-        'plan_id': plan_id,
-        'plan_name': plan['name'],
-        'razorpay': {
-            'order_id': order_details.order_id,
-            'amount': order_details.amount,
-            'currency': order_details.currency,
-            'key': order_details.key,
-            'notes': order_details.notes
-        },
-        'message': 'Proceed with Razorpay checkout to complete the purchase'
-    }), 202
-
-
-@app.route('/api/invoice/<tx_id>', methods=['POST'])
-@require_api_key
-@require_auth
-def get_invoice(tx_id):
-    data = request.get_json(force=True, silent=True) or {}
-    user_identifier = data.get('user_id') or data.get('email')
-    download = bool(data.get('download')) or 'application/pdf' in (request.headers.get('Accept') or '')
-
-    email, user = _resolve_user(user_identifier)
-    if user is None:
-        return jsonify({'error': 'User not found', 'code': 'USER_NOT_FOUND'}), 404
-    if not email:
-        return jsonify({'error': 'User record missing email address for billing', 'code': 'USER_EMAIL_MISSING'}), 422
-
-    invoice = mongo_client.get_invoice(email, tx_id)
-    if not invoice:
-        return jsonify({'error': 'Invoice not found', 'code': 'INVOICE_NOT_FOUND'}), 404
-
-    file_path = invoice.get('file_path')
-    if download and file_path:
-        if os.path.exists(file_path):
-            return send_file(file_path, as_attachment=True, download_name=f"PII-Sentinel-Invoice-{tx_id}.pdf")
-        return jsonify({'error': 'Invoice file unavailable', 'code': 'INVOICE_FILE_MISSING'}), 410
-
-    if isinstance(invoice.get('created_at'), datetime):
-        invoice['created_at'] = invoice['created_at'].isoformat()
-    if isinstance(invoice.get('updated_at'), datetime):
-        invoice['updated_at'] = invoice['updated_at'].isoformat()
-
-    return jsonify({
-        'invoice': {
-            'transaction_id': invoice.get('transaction_id'),
-            'download_url': invoice.get('download_url'),
-            'file_path': invoice.get('file_path'),
-            'purchase': invoice.get('purchase'),
-            'metadata': invoice.get('metadata', {}),
-            'amount_inr': invoice.get('amount_inr'),
-            'currency': invoice.get('currency'),
-            'created_at': invoice.get('created_at'),
-            'updated_at': invoice.get('updated_at')
         }
-    })
-
-
-@app.route('/api/razorpay/webhook', methods=['POST'])
-def razorpay_webhook():
-    if not razorpay_service or not razorpay_service.enabled:
-        logger.warning("Razorpay webhook received but service not configured")
-        return jsonify({'error': 'RAZORPAY_NOT_CONFIGURED'}), 503
-
-    signature = request.headers.get('X-Razorpay-Signature')
-    body = request.data
-
-    try:
-        event = razorpay_service.verify_webhook(body, signature)
-    except RazorpaySignatureError as exc:
-        logger.warning("Invalid Razorpay webhook signature", exc_info=True)
-        return jsonify({'error': 'SIGNATURE_INVALID', 'message': str(exc)}), 400
-    except RazorpayNotConfigured as exc:
-        logger.error("Razorpay webhook processing failed: not configured", exc_info=True)
-        return jsonify({'error': 'RAZORPAY_NOT_CONFIGURED', 'message': str(exc)}), 503
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.error("Unexpected error verifying Razorpay webhook", exc_info=True)
-        return jsonify({'error': 'WEBHOOK_PROCESSING_ERROR', 'message': str(exc)}), 500
-
-    payment_entity = ((event.get('payload') or {}).get('payment') or {}).get('entity')
-    if not payment_entity:
-        logger.info("Razorpay webhook ignored: no payment entity present", extra={'event': event.get('event')})
-        return jsonify({'status': 'ignored'}), 200
-
-    result = _process_razorpay_payment(payment_entity, event)
-    return jsonify({'result': result}), 200
+        
+        # Return 200 if healthy, 503 if degraded
+        status_code = 200 if is_healthy else 503
+        return jsonify(response), status_code
+        
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return jsonify({
+            'status': 'unhealthy',
+            'timestamp': get_timestamp(),
+            'error': str(e)
+        }), 503
 
 
 @app.route('/api/create-batch', methods=['POST'])
@@ -808,6 +490,7 @@ def create_batch():
         name = data.get('name', f'Batch_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}')
         user_id = data.get('user_id')
         username = data.get('username')  # Get username from request if provided
+        token_user_email = None
         
         # At this point, user is authenticated (require_auth decorator checked this)
         logger.info(f"Authenticated batch creation request for user: {user_id}")
@@ -839,6 +522,7 @@ def create_batch():
                     # Use email as the canonical user_id if available
                     if user.get('email'):
                         user_id = user.get('email')
+                        token_user_email = user.get('email')
                     elif user.get('username'):
                         user_id = user.get('username')
                     elif not username and user.get('fullName'):
@@ -865,6 +549,71 @@ def create_batch():
         except Exception as e:
             logger.warning(f"Error checking duplicate batch names: {e}")
         
+        if not token_user_email and user_id and isinstance(user_id, str) and '@' in user_id:
+            token_user_email = user_id
+
+        # Debit tokens for batch creation (5 tokens per batch)
+        tokens_required_for_batch = 5
+        token_email_normalized = token_user_email.lower() if token_user_email else None
+        if token_email_normalized:
+            # First, verify the user exists and check their token balance
+            user_check = mongo_client.db["User-Base"].find_one({"email": token_email_normalized})
+            if user_check:
+                logger.info(
+                    f"[CREATE BATCH] User found in DB - tokens_balance: {user_check.get('tokens_balance')}, "
+                    f"tokens_total: {user_check.get('tokens_total')}, plan_id: {user_check.get('plan_id')}"
+                )
+                
+                # Initialize tokens if not present (for users created via phone OTP or other methods)
+                if user_check.get('tokens_balance') is None or user_check.get('tokens_total') is None:
+                    logger.info(f"[CREATE BATCH] Initializing tokens for user: {token_email_normalized}")
+                    mongo_client.ensure_user_token_document(token_email_normalized)
+                    # Re-fetch user to get updated token info
+                    user_check = mongo_client.db["User-Base"].find_one({"email": token_email_normalized})
+                    logger.info(
+                        f"[CREATE BATCH] After initialization - tokens_balance: {user_check.get('tokens_balance')}, "
+                        f"tokens_total: {user_check.get('tokens_total')}"
+                    )
+            else:
+                logger.warning(f"[CREATE BATCH] User NOT found in DB with email: {token_email_normalized}")
+            
+            token_metadata = {
+                "batch_name": name,
+                "action": "batch_create",
+                "requested_at": datetime.utcnow().isoformat()
+            }
+            debit_result = mongo_client.debit_tokens(
+                token_email_normalized,
+                tokens_required_for_batch,
+                'batch:create',
+                token_metadata
+            )
+            logger.info(f"[CREATE BATCH] Debit result: {debit_result}")
+            if not debit_result.get('success'):
+                error_code = debit_result.get('error') or 'TOKEN_DEBIT_FAILED'
+                status_map = {
+                    'INSUFFICIENT_TOKENS': 402,
+                    'USER_NOT_FOUND': 404,
+                    'DB_UNAVAILABLE': 503
+                }
+                status_code = status_map.get(error_code, 400)
+                logger.warning(
+                    "[CREATE BATCH] Token debit failed for %s (code=%s)",
+                    token_email_normalized,
+                    error_code
+                )
+                messages = {
+                    'INSUFFICIENT_TOKENS': 'You need at least 5 tokens to create a batch.',
+                    'USER_NOT_FOUND': 'User account not found. Please sign in again.',
+                    'DB_UNAVAILABLE': 'Token service is temporarily unavailable. Try again later.'
+                }
+                return jsonify({
+                    'error': error_code,
+                    'message': messages.get(error_code, 'Unable to create batch due to token debit failure.')
+                }), status_code
+        else:
+            logger.warning("[CREATE BATCH] Skipping token debit; unable to resolve email for user_id=%s", user_id)
+
         batch_id = str(uuid.uuid4())
         batch_doc = mongo_client.create_batch(batch_id, name, user_id, username)
         
@@ -1029,6 +778,8 @@ def upload_files_v2():
                 logger.info(f"Processing complete: {len(results)} files processed")
                 
                 # Save results to MongoDB
+                successful_results = []
+                total_processing_time = 0.0
                 for result in results:
                     if result.get('success'):
                         filename = result.get('filename', '')
@@ -1043,7 +794,9 @@ def upload_files_v2():
                             # Log sample PII structure
                             if len(piis) > 0 and isinstance(piis[0], dict):
                                 logger.info(f"  Sample PII structure: {list(piis[0].keys())}")
-                                logger.info(f"  Sample PII: type={piis[0].get('type')}, value={str(piis[0].get('value') or piis[0].get('match', ''))[:50]}")
+                                logger.info(f"  Sample PII: type={piis[0].get('type')}, value={str(piis[0].get('value') or piis[0].get('match', ''))[:50]}, has_bbox={('bbox' in piis[0])}")
+                                if 'bbox' in piis[0]:
+                                    logger.info(f"  Sample bbox: {piis[0]['bbox']}")
                         else:
                             logger.warning(f"  ⚠️ No PIIs detected in {filename}")
                         
@@ -1054,17 +807,60 @@ def upload_files_v2():
                             {
                                 'pii_count': pii_count,
                                 'page_count': result.get('page_count', 0),
-                                'piis': piis
+                                'piis': piis,
+                                'processed_at': result.get('timestamp'),
+                                'processing_time': result.get('processing_time')
                             }
                         )
                         if save_success:
                             logger.info(f"  ✓ File {filename} saved to MongoDB successfully")
                         else:
                             logger.error(f"  ❌ Failed to save file {filename} to MongoDB!")
+                        successful_results.append(result)
+                        total_processing_time += float(result.get('processing_time') or 0.0)
                 
                 # Update batch stats
-                pii_results = {'files': results}
-                mongo_client.update_batch_stats(batch_id, len(results), pii_results, scan_duration=0)
+                pii_results = {'files': successful_results}
+                mongo_client.update_batch_stats(batch_id, len(successful_results), pii_results, scan_duration=total_processing_time)
+
+                # Debit tokens for processed files
+                tokens_per_file = 2
+                tokens_to_debit = len(successful_results) * tokens_per_file
+                if tokens_to_debit > 0 and user_id:
+                    user_email = str(user_id).strip().lower()
+                    try:
+                        token_metadata = {
+                            "batch_id": batch_id,
+                            "job_id": job_id,
+                            "files_processed": len(successful_results),
+                            "tokens_per_file": tokens_per_file
+                        }
+                        debit_result = mongo_client.debit_tokens(
+                            user_email,
+                            tokens_to_debit,
+                            'scan:file_processing',
+                            token_metadata
+                        )
+                        if debit_result.get('success'):
+                            logger.info(
+                                "Tokens debited for user %s: %s (balance=%s)",
+                                user_email,
+                                tokens_to_debit,
+                                debit_result.get('balance')
+                            )
+                        else:
+                            logger.warning(
+                                "Failed to debit tokens for user %s: %s",
+                                user_email,
+                                debit_result.get('error')
+                            )
+                    except Exception as token_error:
+                        logger.error(
+                            "Error debiting tokens for user %s: %s",
+                            user_email,
+                            token_error,
+                            exc_info=True
+                        )
                 
                 # Update job status
                 with _jobs_lock:
@@ -1104,6 +900,218 @@ def upload_files_v2():
 def upload_files():
     """Upload and process files - delegates to V2."""
     return upload_files_v2()
+
+
+# ------------------------------------------------------------
+# Image OCR + PII Detection Endpoint
+# ------------------------------------------------------------
+
+@app.route('/api/pii/image/extract', methods=['POST', 'OPTIONS'])
+@require_api_key
+def extract_pii_from_images():
+    """
+    Extract text from images using OCR and detect PIIs
+    Supports: PNG, JPG, JPEG, SVG
+    Parallel processing for multiple images
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        # Check if files are uploaded
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files uploaded'}), 400
+        
+        files = request.files.getlist('files')
+        if not files or len(files) == 0:
+            return jsonify({'error': 'No files provided'}), 400
+        
+        logger.info(f"🖼️ Received {len(files)} images for OCR + PII detection")
+        
+        # Validate file types
+        allowed_extensions = {'.png', '.jpg', '.jpeg', '.svg'}
+        images_data = []
+        
+        for file in files:
+            filename = secure_filename(file.filename)
+            ext = os.path.splitext(filename)[1].lower()
+            
+            if ext not in allowed_extensions:
+                return jsonify({
+                    'error': f'Invalid file type: {ext}. Allowed: {", ".join(allowed_extensions)}'
+                }), 400
+            
+            # Read file bytes
+            file_bytes = file.read()
+            
+            if len(file_bytes) == 0:
+                return jsonify({'error': f'Empty file: {filename}'}), 400
+            
+            images_data.append((file_bytes, filename))
+        
+        # Import pipeline
+        try:
+            from image_ocr_pipeline import get_pipeline
+            from masker import PIIDetector as ExistingPIIDetector
+            
+            # Initialize PII detector
+            pii_detector_instance = ExistingPIIDetector()
+            
+            # Get pipeline instance
+            pipeline = get_pipeline(pii_detector_instance)
+            
+            # Process all images in parallel
+            results = pipeline.process_multiple_images(
+                images_data, 
+                max_workers=min(len(images_data), 4)  # Max 4 parallel workers
+            )
+            
+            # Format response
+            response = {
+                'success': True,
+                'total_images': len(results),
+                'results': [result.to_dict() for result in results],
+                'summary': {
+                    'total_piis_found': sum(r.total_piis for r in results),
+                    'images_with_piis': sum(1 for r in results if r.total_piis > 0),
+                    'total_processing_time': sum(r.processing_time for r in results)
+                }
+            }
+            
+            logger.info(f"✅ Successfully processed {len(results)} images, found {response['summary']['total_piis_found']} PIIs")
+            
+            return jsonify(response), 200
+            
+        except ImportError as e:
+            logger.error(f"Image OCR pipeline not available: {e}")
+            return jsonify({
+                'error': 'Image OCR module not installed. Please install: pip install paddleocr opencv-python cairosvg pytesseract'
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Image OCR processing failed: {e}", exc_info=True)
+        return jsonify({'error': f'Processing failed: {str(e)}'}), 500
+
+
+@app.route('/api/pii/image/mask', methods=['POST', 'OPTIONS'])
+@require_api_key
+def mask_pii_in_images():
+    """
+    Mask detected PIIs in images
+    Supports: blackout, hash, blur, pixelate masking modes
+    """
+    if request.method == 'OPTIONS':
+        return '', 204
+    
+    try:
+        # Get form data
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files uploaded'}), 400
+        
+        files = request.files.getlist('files')
+        if not files or len(files) == 0:
+            return jsonify({'error': 'No files provided'}), 400
+        
+        # Get PII detection results from form data (JSON string)
+        pii_results_json = request.form.get('pii_results')
+        if not pii_results_json:
+            return jsonify({'error': 'PII detection results required'}), 400
+        
+        try:
+            pii_results = json.loads(pii_results_json)
+        except json.JSONDecodeError:
+            return jsonify({'error': 'Invalid PII results JSON'}), 400
+        
+        logger.warning("Image masking request received, but image masking is disabled. Returning error.")
+        return jsonify({
+            'success': False,
+            'error': 'IMAGE_MASKING_DISABLED',
+            'message': 'Image masking is currently disabled for uploaded image files.'
+        }), 400
+        
+    except Exception as e:
+        logger.error(f"Image masking failed: {e}", exc_info=True)
+        return jsonify({'error': f'Masking failed: {str(e)}'}), 500
+
+
+# ------------------------------------------------------------
+# Token consumption endpoint
+# ------------------------------------------------------------
+
+@app.route('/api/action/consume-token', methods=['POST'])
+@require_api_key
+@require_auth
+def consume_token_action():
+    """Deduct tokens for a metered action (lock_json, unlock_json, download_masked_file, etc.)."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        logger.error("consume_token_action: invalid JSON payload")
+        return jsonify({'success': False, 'error': 'INVALID_PAYLOAD'}), 400
+
+    action_raw = data.get('action')
+    action = str(action_raw).strip().lower() if action_raw else ''
+    if not action:
+        return jsonify({'success': False, 'error': 'ACTION_REQUIRED'}), 400
+
+    if action not in TOKEN_ACTION_COSTS:
+        logger.warning(f"consume_token_action: Unsupported action '{action}'")
+        return jsonify({'success': False, 'error': 'UNSUPPORTED_ACTION'}), 422
+
+    email = data.get('email') or data.get('user_id')
+    if not email:
+        return jsonify({'success': False, 'error': 'EMAIL_REQUIRED'}), 400
+    email = str(email).strip().lower()
+
+    # Check plan restrictions for lock_json and unlock_json (Professional/Enterprise only)
+    if action in ['lock_json', 'unlock_json']:
+        user = mongo_client.get_user_by_email(email)
+        if not user:
+            return jsonify({'success': False, 'error': 'USER_NOT_FOUND'}), 404
+        
+        user_plan = user.get('plan_id', 'starter').lower()
+        if user_plan not in ['professional', 'enterprise']:
+            logger.warning(f"consume_token_action: User {email} with plan '{user_plan}' attempted to use {action}")
+            return jsonify({
+                'success': False, 
+                'error': 'PLAN_RESTRICTION',
+                'message': f'{action.replace("_", " ").title()} is only available on Professional and Enterprise plans.'
+            }), 403
+
+    tokens_required = TOKEN_ACTION_COSTS[action]
+    metadata = data.get('metadata') or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update({
+        "action": action,
+        "request_id": str(uuid.uuid4())
+    })
+
+    logger.info(f"consume_token_action: action={action}, tokens={tokens_required}, email={email}")
+
+    result = mongo_client.debit_tokens(email, tokens_required, f'action:{action}', metadata)
+    if result.get('success'):
+        # Invalidate profile cache to reflect updated token balance
+        invalidate_profile_cache(email)
+        
+        response_payload = {
+            'success': True,
+            'balance': result.get('balance'),
+            'unlimited': result.get('unlimited', False),
+            'cost': tokens_required
+        }
+        logger.info(f"consume_token_action: success for {email}, balance={result.get('balance')}, unlimited={result.get('unlimited')}")
+        return jsonify(response_payload), 200
+
+    error_code = result.get('error') or 'UNKNOWN_ERROR'
+    status_map = {
+        'INSUFFICIENT_TOKENS': 402,
+        'USER_NOT_FOUND': 404,
+        'DB_UNAVAILABLE': 503
+    }
+    status_code = status_map.get(error_code, 400)
+    logger.warning(f"consume_token_action: failed for {email} - {error_code}")
+    return jsonify({'success': False, 'error': error_code}), status_code
 
 
 # ===== Old code removed - was causing issues =====
@@ -1227,6 +1235,13 @@ def mask_files():
                 logger.info(f"  File {file_idx}: {filename}")
                 logger.info(f"    PIIs type: {type(piis).__name__}, length: {len(piis) if isinstance(piis, list) else 'N/A'}")
                 
+                # DEBUG: Log first few PIIs to see their structure
+                if isinstance(piis, list) and len(piis) > 0:
+                    for i, pii in enumerate(piis[:3]):
+                        logger.info(f"    PII {i+1}: {pii.keys() if isinstance(pii, dict) else type(pii)}")
+                        if isinstance(pii, dict):
+                            logger.info(f"      type={pii.get('type')}, has_bbox={('bbox' in pii)}, bbox={pii.get('bbox')}")
+                
                 if filename:
                     # Ensure piis is a list
                     if not isinstance(piis, list):
@@ -1256,6 +1271,28 @@ def mask_files():
         masked_results = []
         skipped_files = []
         
+        def normalize_bbox(raw_bbox):
+            """Convert bbox into dict{x,y,width,height} if possible."""
+            if not raw_bbox:
+                return None
+            if isinstance(raw_bbox, dict):
+                if all(key in raw_bbox for key in ['x', 'y', 'width', 'height']):
+                    return {
+                        'x': int(raw_bbox['x']),
+                        'y': int(raw_bbox['y']),
+                        'width': int(raw_bbox['width']),
+                        'height': int(raw_bbox['height'])
+                    }
+                return None
+            if isinstance(raw_bbox, (list, tuple)) and len(raw_bbox) == 4:
+                return {
+                    'x': int(raw_bbox[0]),
+                    'y': int(raw_bbox[1]),
+                    'width': int(raw_bbox[2]),
+                    'height': int(raw_bbox[3])
+                }
+            return None
+
         logger.info(f"Starting masking process for {len(results)} files")
         
         for result in results:
@@ -1357,9 +1394,14 @@ def mask_files():
             
             # Filter PIIs by selected types if provided
             selected_pii_types = data.get('selected_pii_types')
+            normalized_selected_types: List[str] = []
             if selected_pii_types and len(selected_pii_types) > 0:
-                selected_set = set(selected_pii_types)
-                piis = [pii for pii in piis if pii.get('type') in selected_set]
+                selected_set = {str(p).strip().lower() for p in selected_pii_types}
+                normalized_selected_types = list(selected_set)
+                piis = [
+                    pii for pii in piis
+                    if str(pii.get('type', '')).strip().lower() in selected_set
+                ]
                 logger.info(f"Filtered to {len(piis)} PIIs from selected types: {selected_pii_types}")
             
             if not piis:
@@ -1389,7 +1431,9 @@ def mask_files():
                                 }
                     masker.mask_pdf(original_path, piis, output_path, mask_type, password)
                 elif is_image_file(filename):
-                    masker.mask_image(original_path, piis, output_path, mask_type)
+                    logger.info(f"Skipping image file {filename}: image masking is disabled")
+                    skipped_files.append(filename)
+                    continue
                 elif is_docx_file(filename):
                     if mask_type == 'hash' and password:
                         # Create mapping for DOCX (before masking)
@@ -1912,8 +1956,10 @@ def list_batches():
                     'name': batch.get('name'),
                     'created_at': batch.get('created_at'),
                     'updated_at': batch.get('updated_at'),
+                    'processed_at': batch.get('processed_at'),
                     'status': batch.get('status', 'pending'),
-                    'stats': batch.get('stats', {})
+                    'stats': batch.get('stats', {}),
+                    'summary': batch.get('summary', {})
                 }
                 
                 # Minimal files data - NO PIIs (load on demand)
@@ -2522,9 +2568,33 @@ def decrypt_json():
         logger.info(f"✓ Password verified")
         
         # ============= STEP 3: Decrypt JSON =============
-        salt = base64.b64decode(encrypted_data['salt'])
-        iv = base64.b64decode(encrypted_data['iv'])
-        ciphertext = base64.b64decode(encrypted_data['ciphertext'])
+        # Handle both old format (with nested 'data') and new format (flat structure)
+        # Old format: { "success": true, "file_id": "...", "encrypted": true, "data": { "salt": "...", "iv": "...", "ciphertext": "..." } }
+        # New format: { "file_id": "...", "encrypted": true, "salt": "...", "iv": "...", "ciphertext": "..." }
+        
+        # Check if this is the old nested format
+        if 'data' in encrypted_data and isinstance(encrypted_data['data'], dict):
+            logger.info("📦 Detected old format with nested 'data' field")
+            encrypted_data = encrypted_data['data']  # Extract the nested data
+        
+        # Check if required fields exist
+        required_fields = ['salt', 'iv', 'ciphertext']
+        missing_fields = [field for field in required_fields if field not in encrypted_data]
+        
+        if missing_fields:
+            logger.error(f"❌ Missing required encryption fields: {missing_fields}")
+            logger.error(f"   File structure: {list(encrypted_data.keys())}")
+            return jsonify({
+                'error': f'Invalid encrypted file format. Missing fields: {", ".join(missing_fields)}. This file may not be encrypted or is corrupted.'
+            }), 400
+        
+        try:
+            salt = base64.b64decode(encrypted_data['salt'])
+            iv = base64.b64decode(encrypted_data['iv'])
+            ciphertext = base64.b64decode(encrypted_data['ciphertext'])
+        except Exception as decode_error:
+            logger.error(f"❌ Base64 decode error: {decode_error}")
+            return jsonify({'error': 'Invalid encrypted data format - base64 decode failed'}), 400
         
         # Detect KDF algorithm (SHA-512 or SHA-256)
         kdf_algorithm = encrypted_data.get('kdf', 'PBKDF2-SHA256')  # Default to SHA-256 for old files
@@ -2644,11 +2714,41 @@ def generate_otp():
     return str(random.randint(100000, 999999))
 
 
-def send_sms_otp(mobile, otp):
+def send_sms_otp(mobile: str, otp: str, country_code: Optional[str] = None) -> bool:
     """
-    Send OTP via SMS using Twilio.
-    Falls back to logging if Twilio credentials are not configured.
+    Send OTP via SMS using 2Factor.in or Twilio (fallback).
+    Falls back to logging if SMS providers are not configured.
     """
+    # Normalize inputs
+    digits_only_mobile = ''.join(filter(str.isdigit, str(mobile)))
+    digits_only_country = ''.join(filter(str.isdigit, str(country_code))) if country_code else ''
+    if not digits_only_mobile:
+        logger.error("send_sms_otp: mobile number is empty after normalization")
+        return False
+    if not digits_only_country:
+        digits_only_country = '91'
+    phone_numeric = f"{digits_only_country}{digits_only_mobile}"
+    phone_e164 = f"+{phone_numeric}"
+
+    # Primary provider: 2Factor.in (Indian SMS gateway)
+    two_factor_api_key = os.getenv('TWO_FACTOR_API_KEY')
+    if two_factor_api_key:
+        try:
+            url = f"https://2factor.in/API/V1/{two_factor_api_key}/SMS/{phone_numeric}/{otp}"
+            logger.info(f"Sending OTP via 2Factor.in to {phone_e164}")
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            status = data.get('Status')
+            details = data.get('Details')
+            if status == 'Success':
+                logger.info(f"OTP sent successfully via 2Factor.in: Details={details}")
+                return True
+            logger.error(f"2Factor.in responded with error: Status={status}, Details={details}")
+        except Exception as e:
+            logger.error(f"Error sending OTP via 2Factor.in: {e}", exc_info=True)
+
+    # Fallback provider: Twilio
     twilio_account_sid = os.getenv('TWILIO_ACCOUNT_SID')
     twilio_auth_token = os.getenv('TWILIO_AUTH_TOKEN')
     twilio_phone_number = os.getenv('TWILIO_PHONE_NUMBER')
@@ -2656,8 +2756,8 @@ def send_sms_otp(mobile, otp):
     # If Twilio credentials are not set, log the OTP (for development/testing)
     if not twilio_account_sid or not twilio_auth_token or not twilio_phone_number:
         logger.warning("Twilio credentials not configured. OTP will be logged instead of sent via SMS.")
-        logger.info(f"OTP for +91 {mobile}: {otp}")
-        logger.info("To enable SMS, set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_PHONE_NUMBER in .env file")
+        logger.info(f"OTP for {phone_e164}: {otp}")
+        logger.info("To enable SMS, set TWO_FACTOR_API_KEY or TWILIO_* credentials in the environment")
         return True
     
     try:
@@ -2666,9 +2766,6 @@ def send_sms_otp(mobile, otp):
         # Initialize Twilio client
         client = Client(twilio_account_sid, twilio_auth_token)
         
-        # Format mobile number with country code (India: +91)
-        to_number = f"+91{mobile}"
-        
         # Create SMS message
         message_body = f"Your PII Sentinel OTP is {otp}. Valid for 2 minutes. Do not share this code."
         
@@ -2676,15 +2773,15 @@ def send_sms_otp(mobile, otp):
         message = client.messages.create(
             body=message_body,
             from_=twilio_phone_number,
-            to=to_number
+            to=phone_e164
         )
         
-        logger.info(f"SMS sent successfully to {to_number}. Message SID: {message.sid}")
+        logger.info(f"SMS sent successfully to {phone_e164}. Message SID: {message.sid}")
         return True
         
     except ImportError:
         logger.error("Twilio library not installed. Install with: pip install twilio")
-        logger.info(f"OTP for +91 {mobile}: {otp}")
+        logger.info(f"OTP for {phone_e164}: {otp}")
         return False
     except Exception as e:
         error_msg = str(e)
@@ -2699,7 +2796,7 @@ def send_sms_otp(mobile, otp):
         elif "insufficient" in error_msg.lower() or "balance" in error_msg.lower():
             logger.error("Insufficient Twilio account balance. Please add funds to your Twilio account.")
         
-        logger.info(f"OTP for +91 {mobile}: {otp} (SMS failed, check logs above for details)")
+        logger.info(f"OTP for {phone_e164}: {otp} (SMS failed, check logs above for details)")
         return False
 
 
@@ -2714,9 +2811,11 @@ def send_otp():
             return jsonify({'error': 'No data provided'}), 400
         
         mobile_raw = data.get('mobile', '')
+        country_code_raw = data.get('country_code') or data.get('countryCode') or '91'
         
         # Normalize: Extract only digits
         mobile = ''.join(filter(str.isdigit, str(mobile_raw)))
+        country_code = ''.join(filter(str.isdigit, str(country_code_raw)))
         
         if not mobile:
             return jsonify({'error': 'Mobile number is required'}), 400
@@ -2724,6 +2823,9 @@ def send_otp():
         # Validate mobile number (10 digits)
         if len(mobile) != 10:
             return jsonify({'error': 'Enter a valid 10-digit mobile number.'}), 400
+        
+        if not country_code:
+            country_code = '91'
         
         logger.info(f"[SEND OTP] Mobile normalized: '{mobile}'")
         
@@ -2749,9 +2851,14 @@ def send_otp():
         logger.info(f"OTP will expire at: {expires_at} (in {OTP_EXPIRY_SECONDS} seconds)")
         
         # Send OTP via SMS
-        send_sms_otp(mobile, otp)
+        sms_sent = send_sms_otp(mobile, otp, country_code)
+        if not sms_sent:
+            logger.error(f"Failed to send OTP via SMS to {country_code}+{mobile}")
+            return jsonify({
+                'error': 'Failed to send OTP via SMS. Please try again in a moment.'
+            }), 502
         
-        logger.info(f"OTP sent to mobile: {mobile}")
+        logger.info(f"OTP sent to mobile: {mobile} (country code {country_code})")
         
         return jsonify({
             'success': True,
@@ -2775,9 +2882,11 @@ def resend_otp():
             return jsonify({'error': 'No data provided'}), 400
         
         mobile_raw = data.get('mobile', '')
+        country_code_raw = data.get('country_code') or data.get('countryCode') or '91'
         
         # Normalize: Extract only digits
         mobile = ''.join(filter(str.isdigit, str(mobile_raw)))
+        country_code = ''.join(filter(str.isdigit, str(country_code_raw)))
         
         if not mobile:
             return jsonify({'error': 'Mobile number is required'}), 400
@@ -2785,6 +2894,9 @@ def resend_otp():
         # Validate mobile number (10 digits)
         if len(mobile) != 10:
             return jsonify({'error': 'Enter a valid 10-digit mobile number.'}), 400
+        
+        if not country_code:
+            country_code = '91'
         
         logger.info(f"[RESEND OTP] Mobile normalized: '{mobile}'")
         
@@ -2809,9 +2921,14 @@ def resend_otp():
         logger.info(f"OTP regenerated and stored for mobile {mobile}: {otp}")
         
         # Send OTP via SMS
-        send_sms_otp(mobile, otp)
+        sms_sent = send_sms_otp(mobile, otp, country_code)
+        if not sms_sent:
+            logger.error(f"[RESEND OTP] Failed to send OTP via SMS to {country_code}+{mobile}")
+            return jsonify({
+                'error': 'Failed to resend OTP via SMS. Please try again later.'
+            }), 502
         
-        logger.info(f"OTP resent to mobile: {mobile}")
+        logger.info(f"OTP resent to mobile: {mobile} (country code {country_code})")
         
         return jsonify({
             'success': True,
@@ -3127,7 +3244,7 @@ def test_sms():
 
 @app.route('/api/profile', methods=['GET'])
 @require_api_key
-@cached(TTLCache(maxsize=100, ttl=10))
+@cached(profile_cache)
 def get_profile():
     """Get user profile and stats."""
     username = request.args.get('username')
@@ -3144,6 +3261,13 @@ def get_profile():
     
     if not user:
         return jsonify({'error': 'User not found'}), 404
+    
+    # Ensure account_status is set for this user
+    user_email = user.get('email')
+    if user_email:
+        mongo_client.ensure_user_token_document(user_email)
+        # Re-fetch user to get updated fields
+        user = mongo_client.get_user_by_email(user_email)
     
     # Remove password hash from response
     user_data = {k: v for k, v in user.items() if k != 'password_hash'}
@@ -3490,6 +3614,198 @@ def internal_error(error):
 # SETTINGS ROUTES
 # ============================================
 
+
+def _generate_user_data_pdf(email: str, export_payload: Dict[str, Any]) -> Tuple[str, str]:
+    """Generate a branded PDF export for user data and return (path, filename)."""
+    from io import BytesIO
+    from textwrap import wrap
+    import tempfile
+    import glob
+    import re
+
+    try:
+        from reportlab.pdfgen import canvas
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib import colors
+        from reportlab.lib.units import mm
+    except Exception as exc:  # pragma: no cover - dependency failure
+        logger.error("ReportLab dependency missing for data export", exc_info=True)
+        raise exc
+
+    profile = export_payload.get('profile') or {}
+    token_summary = export_payload.get('token_summary') or {}
+    activity = export_payload.get('activity') or {}
+    preferences = export_payload.get('preferences') or {}
+    batches = export_payload.get('batches') or []
+    generated_at = export_payload.get('generated_at', datetime.utcnow().isoformat(timespec='seconds') + 'Z')
+
+    buffer = BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 20 * mm
+    brand_color = colors.HexColor('#4338CA')
+    text_color = colors.HexColor('#0F172A')
+    muted_color = colors.HexColor('#475569')
+
+    def format_value(value: Any) -> str:
+        if value is None or value == '':
+            return 'Not available'
+        if isinstance(value, bool):
+            return 'Enabled' if value else 'Disabled'
+        return str(value)
+
+    def draw_header():
+        pdf.setFillColor(brand_color)
+        pdf.setFont("Helvetica-Bold", 20)
+        pdf.drawString(margin, height - 25 * mm, "PII Sentinel")
+        pdf.setFillColor(text_color)
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(margin, height - 35 * mm, "Personal Data Export")
+        pdf.setFillColor(muted_color)
+        pdf.setFont("Helvetica", 9)
+        owner_line = f"Generated for {profile.get('fullName') or profile.get('username') or email}"
+        pdf.drawString(margin, height - 40 * mm, owner_line)
+        pdf.drawRightString(width - margin, height - 40 * mm, generated_at)
+
+    y_position = height - 50 * mm
+
+    def ensure_space(space: float):
+        nonlocal y_position
+        if y_position - space < 25 * mm:
+            pdf.showPage()
+            draw_header()
+            y_position = height - 50 * mm
+
+    def write_section(title: str):
+        nonlocal y_position
+        ensure_space(12 * mm)
+        pdf.setFillColor(brand_color)
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(margin, y_position, title)
+        y_position -= 7 * mm
+
+    def write_key_value(label: str, value: Any, wrap_width: int = 90):
+        nonlocal y_position
+        ensure_space(9 * mm)
+        pdf.setFillColor(text_color)
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(margin, y_position, f"{label}:")
+        y_position -= 4.5 * mm
+        pdf.setFont("Helvetica", 9)
+        pdf.setFillColor(muted_color)
+        wrapped = wrap(format_value(value), wrap_width)
+        for line in wrapped or ['Not available']:
+            ensure_space(6 * mm)
+            pdf.drawString(margin, y_position, line)
+            y_position -= 4.5 * mm
+
+    draw_header()
+
+    # Account summary
+    write_section("Account Summary")
+    write_key_value("Full name", profile.get('fullName'))
+    write_key_value("Email", profile.get('email', email))
+    write_key_value("Username", profile.get('username'))
+    write_key_value("Plan", profile.get('plan_id') or profile.get('plan') or profile.get('subscription', {}).get('plan_id'))
+    write_key_value("Account status", profile.get('account_status') or profile.get('status') or 'Active')
+
+    # Preference summary
+    write_section("Communication Preferences")
+    write_key_value("Email updates", preferences.get('receiveUpdates'))
+    write_key_value("Data collection consent", preferences.get('consentDataProcessing'))
+
+    # Token summary
+    if token_summary:
+        write_section("Token Overview")
+        write_key_value("Tokens total", token_summary.get('tokens_total'))
+        write_key_value("Tokens used", token_summary.get('tokens_used'))
+        write_key_value("Tokens balance", token_summary.get('tokens_balance'))
+        write_key_value("Last reset", token_summary.get('last_token_reset'))
+
+    # Activity summary
+    if activity:
+        write_section("Recent Activity")
+        write_key_value("Last batch created", activity.get('lastBatchCreated'))
+        write_key_value("Last scan completed", activity.get('lastPiiScanCompleted'))
+
+    # Usage stats
+    if batches:
+        write_section("Usage Snapshot")
+        total_batches = len(batches)
+        total_files = sum(len(batch.get('files', [])) for batch in batches if isinstance(batch.get('files'), list))
+        total_piis = 0
+        for batch in batches:
+            stats = batch.get('stats') or {}
+            try:
+                total_piis += int(stats.get('piis', 0))
+            except (TypeError, ValueError):
+                continue
+        write_key_value("Batches exported (latest 50)", total_batches)
+        write_key_value("Files processed", total_files)
+        write_key_value("PIIs detected", total_piis)
+
+        recent_batches = batches[:5]
+        if recent_batches:
+            write_section("Recent Batches")
+            for batch in recent_batches:
+                ensure_space(12 * mm)
+                pdf.setFillColor(text_color)
+                pdf.setFont("Helvetica-Bold", 10)
+                batch_label = batch.get('batch_id') or batch.get('_id') or 'Batch'
+                pdf.drawString(margin, y_position, f"• {batch_label}")
+                y_position -= 4.5 * mm
+                pdf.setFont("Helvetica", 9)
+                pdf.setFillColor(muted_color)
+                details = [
+                    ("Created", batch.get('created_at')),
+                    ("Status", batch.get('status', 'unknown')),
+                    ("Files", len(batch.get('files', [])) if isinstance(batch.get('files'), list) else 'N/A'),
+                ]
+                stats = batch.get('stats') or {}
+                if stats:
+                    details.append(("PIIs detected", stats.get('piis')))
+                for label, value in details:
+                    ensure_space(5 * mm)
+                    pdf.drawString(margin + 5 * mm, y_position, f"{label}: {format_value(value)}")
+                    y_position -= 4.0 * mm
+
+    ensure_space(12 * mm)
+    pdf.setFillColor(muted_color)
+    pdf.setFont("Helvetica-Oblique", 8)
+    pdf.drawString(
+        margin,
+        y_position,
+        "If you need assistance interpreting this export, reach out to support@pii-sentinel.com."
+    )
+
+    pdf.save()
+    buffer.seek(0)
+
+    safe_email = re.sub(r'[^A-Za-z0-9]+', '-', email).strip('-') or 'user'
+    timestamp = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+    file_name = f"PII-Sentinel-DataExport-{safe_email}-{timestamp}.pdf"
+
+    temp_dir = tempfile.gettempdir()
+    file_path = os.path.join(temp_dir, file_name)
+
+    with open(file_path, 'wb') as fp:
+        fp.write(buffer.getvalue())
+
+    # Clean up older exports for same user (older than 1 hour)
+    pattern = os.path.join(temp_dir, f"PII-Sentinel-DataExport-{safe_email}-*.pdf")
+    expiry_seconds = 3600
+    now = time.time()
+    for stale_file in glob.glob(pattern):
+        if stale_file == file_path:
+            continue
+        try:
+            if now - os.path.getmtime(stale_file) > expiry_seconds:
+                os.remove(stale_file)
+        except OSError:
+            continue
+
+    return file_path, file_name
+
 @app.route('/api/settings/update-status', methods=['POST'])
 @require_api_key
 def update_account_status():
@@ -3547,16 +3863,156 @@ def update_plan():
             user = mongo_client.get_user_by_email(email)
             if user and '_id' in user:
                 user['_id'] = str(user['_id'])
+            token_summary = mongo_client.get_token_summary(email) or {}
             return jsonify({
                 'success': True,
                 'message': 'Plan updated successfully',
-                'user': user
+                'user': user,
+                'tokens': token_summary
             }), 200
         else:
             return jsonify({'error': 'Failed to update plan'}), 500
     
     except Exception as e:
         logger.error(f"Error updating plan: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# Token / User Info Endpoints
+# ============================================================
+
+@app.route('/api/user/tokens', methods=['GET'])
+@require_api_key
+def get_user_tokens():
+    """Get user token summary."""
+    try:
+        user_id = request.args.get('user_id') or request.args.get('email')
+        if not user_id:
+            return jsonify({'error': 'user_id or email required'}), 400
+        
+        user_id = str(user_id).strip().lower()
+        
+        # Ensure user has token document initialized
+        mongo_client.ensure_user_token_document(user_id)
+        
+        token_summary = mongo_client.get_token_summary(user_id)
+        
+        if not token_summary:
+            # User not found or token summary unavailable
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Debug logging
+        logger.info(f"Token summary for {user_id}:")
+        logger.info(f"  - plan_id: {token_summary.get('plan_id')}")
+        logger.info(f"  - features_enabled: {token_summary.get('features_enabled')}")
+        
+        return jsonify({'tokens': token_summary}), 200
+    
+    except Exception as e:
+        logger.error(f"Error fetching token summary: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/activity', methods=['GET'])
+@require_api_key
+def get_user_activity():
+    """Get user activity statistics."""
+    try:
+        user_id = request.args.get('user_id') or request.args.get('email')
+        if not user_id:
+            return jsonify({'error': 'user_id or email required'}), 400
+        
+        user_id = str(user_id).strip().lower()
+        
+        # Get user info
+        user = mongo_client.get_user_by_email(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Get last login from user document
+        last_login = user.get('last_login') or user.get('updated_at') or user.get('created_at')
+        
+        # Get batches for this user - try different user_id formats
+        batches_collection = mongo_client.db["Batch-Base"]
+        
+        # Try finding by exact user_id match or by email
+        batches = list(batches_collection.find({
+            "$or": [
+                {"user_id": user_id},
+                {"user_id": user.get('email')},
+                {"user_id": user.get('username')}
+            ]
+        }).sort("created_at", -1).limit(10))
+        
+        logger.info(f"Found {len(batches)} batches for user {user_id}")
+        
+        # Get last batch created
+        last_batch_created = None
+        if batches:
+            last_batch = batches[0]
+            last_batch_created = last_batch.get('created_at') or last_batch.get('updated_at')
+            logger.info(f"Last batch created at: {last_batch_created}")
+        
+        # Get last PII scan completed - check for any batch with files processed
+        last_pii_scan = None
+        for batch in batches:
+            # Check if batch has processed files
+            if batch.get('processed_at') or batch.get('files') or batch.get('status') == 'completed':
+                last_pii_scan = batch.get('processed_at') or batch.get('updated_at') or batch.get('created_at')
+                logger.info(f"Last PII scan completed at: {last_pii_scan}")
+                break
+        
+        # Calculate account strength
+        strength_score = 0
+        strength_total = 3
+        
+        # Email verified
+        if user.get('email') and user.get('emailVerified') != False:
+            strength_score += 1
+        
+        # Profile complete - check required fields
+        required_fields = ['fullName', 'email', 'country']
+        profile_complete = all(user.get(field) for field in required_fields)
+        if profile_complete:
+            strength_score += 1
+        
+        logger.info(f"Profile completeness check - fullName: {user.get('fullName')}, email: {user.get('email')}, country: {user.get('country')}")
+        
+        # 2FA enabled
+        if user.get('enable2FA') or user.get('twoFactorEnabled'):
+            strength_score += 1
+        
+        account_strength = round((strength_score / strength_total) * 100)
+        
+        # Format timestamps
+        def format_timestamp(ts):
+            if isinstance(ts, datetime):
+                return ts.isoformat()
+            elif isinstance(ts, str):
+                return ts
+            elif ts is None:
+                return None
+            else:
+                return str(ts)
+        
+        return jsonify({
+            'success': True,
+            'activity': {
+                'lastLogin': format_timestamp(last_login),
+                'lastBatchCreated': format_timestamp(last_batch_created),
+                'lastPiiScanCompleted': format_timestamp(last_pii_scan)
+            },
+            'accountStrength': account_strength,
+            'strengthDetails': {
+                'emailVerified': user.get('email') and user.get('emailVerified') != False,
+                'profileComplete': profile_complete,
+                'twoFactorEnabled': user.get('enable2FA') or user.get('twoFactorEnabled')
+            }
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error fetching user activity: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
@@ -3640,25 +4096,19 @@ def download_user_data():
         
         # Get all user data
         user_data = mongo_client.get_user_data_for_export(email)
+        if not user_data:
+            return jsonify({'error': 'User not found'}), 404
+
+        try:
+            _, file_name = _generate_user_data_pdf(email, user_data)
+        except Exception as exc:
+            logger.error(f"Failed to generate data export PDF: {exc}", exc_info=True)
+            return jsonify({'error': 'Failed to generate data export'}), 500
         
-        # Create temporary JSON file
-        import tempfile
-        import json as json_lib
-        
-        temp_dir = tempfile.mkdtemp()
-        json_file = os.path.join(temp_dir, f'user_data_{email}_{int(time.time())}.json')
-        
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json_lib.dump(user_data, f, indent=2, default=str)
-        
-        # Create ZIP file
-        zip_file = os.path.join(temp_dir, f'user_data_{email}_{int(time.time())}.zip')
-        create_zip([json_file], zip_file)
-        
-        # Return file path (in production, upload to S3 or similar and return URL)
         return jsonify({
             'success': True,
-            'downloadUrl': f'/api/settings/download-file?file={os.path.basename(zip_file)}',
+            'downloadUrl': f'/api/settings/download-file?file={file_name}',
+            'fileName': file_name,
             'message': 'Data export prepared successfully'
         }), 200
     
@@ -3775,55 +4225,1135 @@ def delete_account():
         return jsonify({'error': str(e)}), 500
 
 
-PLAN_CATALOG = {
-    'starter': {
-        'id': 'starter',
-        'name': 'Starter',
-        'price_inr': 0,
-        'monthly_tokens': 150,  # 5 tokens/day approximated to monthly bucket
-        'features': {
-            'lock_json': False,
-            'unlock_json': False,
-            'advanced_analysis': False,
-            'log_records': False
-        }
-    },
-    'professional': {
-        'id': 'professional',
-        'name': 'Professional',
-        'price_inr': 999,
-        'monthly_tokens': 500,
-        'features': {
-            'lock_json': True,
-            'unlock_json': True,
-            'advanced_analysis': True,
-            'log_records': False
-        }
-    },
-    'enterprise': {
-        'id': 'enterprise',
-        'name': 'Enterprise',
-        'price_inr': 4999,
-        'monthly_tokens': None,  # Unlimited tokens
-        'features': {
-            'lock_json': True,
-            'unlock_json': True,
-            'advanced_analysis': True,
-            'log_records': True
-        }
-    }
-}
+@app.route('/api/admin/migrate-user-features', methods=['POST'])
+@require_api_key
+def migrate_user_features():
+    """
+    Migration endpoint to ensure all users have complete features_enabled fields.
+    This will update all users to include export_json and log_records fields.
+    """
+    try:
+        if mongo_client.db is None:
+            return jsonify({'error': 'Database not available'}), 503
+        
+        collection = mongo_client.db["User-Base"]
+        all_users = collection.find({})
+        
+        updated_count = 0
+        skipped_count = 0
+        
+        for user in all_users:
+            email = user.get('email')
+            if not email:
+                continue
+            
+            plan_id = user.get('plan_id', 'starter')
+            plan = mongo_client.get_plan(plan_id) or {}
+            plan_features = plan.get('features', {
+                "lock_json": False,
+                "unlock_json": False,
+                "advanced_analysis": False,
+                "export_json": False,
+                "log_records": False
+            })
+            
+            current_features = user.get('features_enabled', {})
+            if not isinstance(current_features, dict):
+                current_features = {}
+            
+            # Check if any features are missing
+            missing_features = []
+            for feature_key in plan_features.keys():
+                if feature_key not in current_features:
+                    missing_features.append(feature_key)
+            
+            if missing_features:
+                # Merge: add missing features with plan defaults, keep existing values
+                merged_features = {**plan_features, **current_features}
+                
+                collection.update_one(
+                    {"email": email},
+                    {
+                        "$set": {
+                            "features_enabled": merged_features,
+                            "updated_at": datetime.utcnow()
+                        }
+                    }
+                )
+                updated_count += 1
+                logger.info(f"✓ Updated features for {email}: added {missing_features}")
+            else:
+                skipped_count += 1
+        
+        return jsonify({
+            'success': True,
+            'updated': updated_count,
+            'skipped': skipped_count,
+            'message': f'Migration complete: {updated_count} users updated, {skipped_count} already up-to-date'
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error migrating user features: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
 
-TOKEN_ACTION_COSTS = {
-    'upload': 1,
-    'lock_json': 5,
-    'unlock_json': 5
-}
 
-ADDON_TOKEN_PRICE_INR = 20
-PAYMENT_SIMULATION_ENABLED = os.getenv('ENABLE_PAYMENT_SIMULATION', 'true').lower() in ('1', 'true', 'yes')
+# ============================================================================
+# RAZORPAY PAYMENT ENDPOINTS
+# ============================================================================
 
-mongo_client.configure_plans(PLAN_CATALOG)
+@app.route('/api/payment/create-order', methods=['POST'])
+@require_api_key
+@require_auth
+def create_payment_order():
+    """Create a Razorpay order for plan upgrade."""
+    try:
+        data = request.get_json()
+        plan_id = data.get('plan_id')
+        user_email = data.get('email') or data.get('user_id')
+        billing_period = data.get('billing_period', 'monthly')  # 'monthly' or 'yearly'
+        notes = data.get('notes', {})
+        
+        if not plan_id:
+            return jsonify({'error': 'Plan ID is required'}), 400
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        plan = PLAN_CATALOG.get(plan_id)
+        if not plan:
+            return jsonify({'error': f'Invalid plan: {plan_id}'}), 400
+        
+        user = mongo_client.get_user_by_email(user_email)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        from payments.razorpay_service import RazorpayService
+        razorpay = RazorpayService.from_env()
+        
+        if not razorpay.enabled:
+            return jsonify({'error': 'Payment service not available'}), 503
+        
+        # Get price based on billing period
+        if billing_period == 'yearly':
+            amount = plan.get('price_inr_yearly', plan['price_inr'] * 12)
+        else:
+            amount = plan['price_inr']
+            
+        # Generate short unique receipt (max 40 chars for Razorpay)
+        receipt = f"pln_{plan_id[:8]}_{uuid.uuid4().hex[:22]}"
+        
+        order = razorpay.create_order(
+            amount_inr=float(amount),
+            receipt=receipt,
+            notes={
+                **notes, 
+                'user_id': user_email, 
+                'plan_id': plan_id, 
+                'plan_name': plan['name'],
+                'billing_period': billing_period
+            }
+        )
+        
+        logger.info(f"✓ Payment order created: {order.order_id} for {user_email} - Plan: {plan_id} ({billing_period}) (₹{amount})")
+        
+        return jsonify({
+            'success': True,
+            'order_id': order.order_id,
+            'amount': order.amount,
+            'currency': order.currency,
+            'key': order.key,
+            'plan_name': plan['name'],
+            'plan_id': plan_id,
+            'billing_period': billing_period
+        })
+    except Exception as e:
+        logger.error(f"Error creating payment order: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/payment/create-token-order', methods=['POST'])
+@require_api_key
+@require_auth
+def create_token_addon_order():
+    """Create a Razorpay order for token addon purchase. Token price: ₹20 per token"""
+    try:
+        data = request.get_json()
+        token_amount = data.get('token_amount')
+        user_email = data.get('email') or data.get('user_id')
+        notes = data.get('notes', {})
+        
+        if not token_amount or token_amount <= 0:
+            return jsonify({'error': 'Valid token amount is required'}), 400
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        user = mongo_client.get_user_by_email(user_email)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        from payments.razorpay_service import RazorpayService
+        razorpay = RazorpayService.from_env()
+        
+        if not razorpay.enabled:
+            return jsonify({'error': 'Payment service not available'}), 503
+        
+        amount = token_amount * ADDON_TOKEN_PRICE_INR
+        # Generate short unique receipt (max 40 chars for Razorpay)
+        receipt = f"tok_{token_amount}_{uuid.uuid4().hex[:22]}"
+        
+        order = razorpay.create_order(
+            amount_inr=float(amount),
+            receipt=receipt,
+            notes={**notes, 'user_id': user_email, 'token_amount': token_amount, 'type': 'token_addon'}
+        )
+        
+        logger.info(f"✓ Token addon order created: {order.order_id} for {user_email} - {token_amount} tokens (₹{amount})")
+        
+        return jsonify({
+            'success': True,
+            'order_id': order.order_id,
+            'amount': order.amount,
+            'currency': order.currency,
+            'key': order.key,
+            'token_amount': token_amount,
+            'price_per_token': ADDON_TOKEN_PRICE_INR
+        })
+    except Exception as e:
+        logger.error(f"Error creating token addon order: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/payment/verify', methods=['POST'])
+@require_api_key
+@require_auth
+def verify_payment():
+    """Verify payment signature and update user's plan or tokens."""
+    try:
+        data = request.get_json()
+        razorpay_order_id = data.get('razorpay_order_id')
+        razorpay_payment_id = data.get('razorpay_payment_id')
+        razorpay_signature = data.get('razorpay_signature')
+        user_email = data.get('email')
+        plan_id = data.get('plan_id')
+        token_amount = data.get('token_amount')
+        
+        if not all([razorpay_order_id, razorpay_payment_id, razorpay_signature]):
+            return jsonify({'error': 'Payment details are incomplete'}), 400
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        from payments.razorpay_service import RazorpayService
+        razorpay = RazorpayService.from_env()
+        
+        if not razorpay.enabled:
+            return jsonify({'error': 'Payment service not available'}), 503
+        
+        is_valid = razorpay.verify_payment_signature(
+            razorpay_order_id=razorpay_order_id,
+            razorpay_payment_id=razorpay_payment_id,
+            razorpay_signature=razorpay_signature
+        )
+        
+        if not is_valid:
+            logger.error(f"❌ Payment signature verification failed for {user_email}")
+            return jsonify({'error': 'Payment verification failed'}), 400
+        
+        logger.info(f"✓ Payment signature verified: {razorpay_payment_id} for {user_email}")
+        
+        payment = razorpay.fetch_payment(razorpay_payment_id)
+        if not payment:
+            logger.error(f"Failed to fetch payment details: {razorpay_payment_id}")
+            return jsonify({'error': 'Failed to fetch payment details'}), 500
+        
+        if plan_id:
+            plan = PLAN_CATALOG.get(plan_id)
+            if not plan:
+                return jsonify({'error': f'Invalid plan: {plan_id}'}), 400
+            
+            # Get billing period from payment notes (set during order creation)
+            billing_period = 'monthly'
+            if payment:
+                notes = payment.get('notes', {})
+                billing_period = notes.get('billing_period', 'monthly')
+            
+            logger.info(f"🔄 Updating plan for {user_email} to {plan_id} ({billing_period})")
+            result = mongo_client.update_user_plan(user_email, plan_id, billing_period)
+            if result:
+                logger.info(f"✅ User {user_email} upgraded to {plan_id} plan ({billing_period})")
+                invalidate_profile_cache(user_email)
+                
+                # Save payment history
+                mongo_client.save_payment_history({
+                    "user_email": user_email,
+                    "payment_id": razorpay_payment_id,
+                    "order_id": razorpay_order_id,
+                    "amount": payment.get('amount', 0),
+                    "currency": payment.get('currency', 'INR'),
+                    "type": "plan_upgrade",
+                    "plan_id": plan_id,
+                    "plan_name": plan['name'],
+                    "billing_period": billing_period,
+                    "payment_method": payment.get('method', 'razorpay')
+                })
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Payment successful! Upgraded to {plan["name"]} plan',
+                    'plan_id': plan_id,
+                    'plan_name': plan['name'],
+                    'payment_id': razorpay_payment_id,
+                    'billing_period': billing_period
+                })
+            else:
+                logger.error(f"Failed to update plan for {user_email}")
+                return jsonify({'error': 'Failed to update plan'}), 500
+                
+        elif token_amount:
+            result = mongo_client.credit_tokens(user_email, token_amount, 'addon_purchase')
+            if result:
+                logger.info(f"✅ Added {token_amount} tokens to {user_email}")
+                invalidate_profile_cache(user_email)
+                
+                # Save payment history
+                mongo_client.save_payment_history({
+                    "user_email": user_email,
+                    "payment_id": razorpay_payment_id,
+                    "order_id": razorpay_order_id,
+                    "amount": payment.get('amount', 0),
+                    "currency": payment.get('currency', 'INR'),
+                    "type": "token_addon",
+                    "token_amount": token_amount,
+                    "payment_method": payment.get('method', 'razorpay')
+                })
+                
+                return jsonify({
+                    'success': True,
+                    'message': f'Payment successful! Added {token_amount} tokens to your account',
+                    'tokens_added': token_amount,
+                    'payment_id': razorpay_payment_id
+                })
+            else:
+                logger.error(f"Failed to credit tokens for {user_email}")
+                return jsonify({'error': 'Failed to credit tokens'}), 500
+        else:
+            return jsonify({'error': 'Invalid payment type'}), 400
+            
+    except Exception as e:
+        logger.error(f"Error verifying payment: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/payment/history', methods=['GET'])
+@require_api_key
+@require_auth
+def get_payment_history():
+    """Get payment history for user."""
+    try:
+        user_email = request.args.get('email')
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        payments = mongo_client.get_payment_history(user_email)
+        
+        return jsonify({
+            'success': True,
+            'payments': payments
+        })
+    except Exception as e:
+        logger.error(f"Error fetching payment history: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/payment/invoice/<payment_id>', methods=['GET'])
+@require_api_key
+@require_auth
+def download_invoice(payment_id):
+    """Generate and download invoice PDF for a payment."""
+    try:
+        user_email = request.args.get('email')
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        # Get payment details from history
+        payments = mongo_client.get_payment_history(user_email)
+        payment = next((p for p in payments if p.get('payment_id') == payment_id), None)
+        
+        if not payment:
+            return jsonify({'error': 'Payment not found'}), 404
+        
+        # Get user details
+        user = mongo_client.get_user_by_email(user_email)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Generate simple HTML invoice
+        amount_inr = payment.get('amount', 0) / 100  # Convert paise to rupees
+        invoice_html = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Invoice - {payment_id}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }}
+        .header {{ text-align: center; border-bottom: 2px solid #4F46E5; padding-bottom: 20px; margin-bottom: 30px; }}
+        .company-name {{ font-size: 28px; font-weight: bold; color: #4F46E5; }}
+        .invoice-title {{ font-size: 20px; margin-top: 10px; }}
+        .section {{ margin: 20px 0; }}
+        .section-title {{ font-weight: bold; font-size: 16px; margin-bottom: 10px; color: #333; }}
+        .info-row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }}
+        .label {{ font-weight: 600; color: #666; }}
+        .value {{ color: #333; }}
+        .total {{ font-size: 20px; font-weight: bold; color: #4F46E5; margin-top: 20px; padding-top: 20px; border-top: 2px solid #4F46E5; }}
+        .footer {{ text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 12px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="company-name">PII SENTINEL</div>
+        <div class="invoice-title">PAYMENT INVOICE</div>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">Customer Information</div>
+        <div class="info-row">
+            <span class="label">Name:</span>
+            <span class="value">{user.get('fullName', 'N/A')}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Email:</span>
+            <span class="value">{user_email}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Date:</span>
+            <span class="value">{payment.get('created_at', datetime.utcnow()).strftime('%B %d, %Y %I:%M %p')}</span>
+        </div>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">Payment Details</div>
+        <div class="info-row">
+            <span class="label">Payment ID:</span>
+            <span class="value">{payment_id}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Order ID:</span>
+            <span class="value">{payment.get('order_id', 'N/A')}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Payment Method:</span>
+            <span class="value">{payment.get('payment_method', 'Razorpay').upper()}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Status:</span>
+            <span class="value">{payment.get('status', 'completed').upper()}</span>
+        </div>
+    </div>
+    
+    <div class="section">
+        <div class="section-title">Transaction Details</div>
+        """
+        
+        if payment.get('type') == 'plan_upgrade':
+            invoice_html += f"""
+        <div class="info-row">
+            <span class="label">Type:</span>
+            <span class="value">Plan Upgrade</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Plan:</span>
+            <span class="value">{payment.get('plan_name', 'N/A')}</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Billing Period:</span>
+            <span class="value">{payment.get('billing_period', 'monthly').capitalize()}</span>
+        </div>
+            """
+        elif payment.get('type') == 'token_addon':
+            invoice_html += f"""
+        <div class="info-row">
+            <span class="label">Type:</span>
+            <span class="value">Token Addon Purchase</span>
+        </div>
+        <div class="info-row">
+            <span class="label">Tokens Added:</span>
+            <span class="value">{payment.get('token_amount', 0)} tokens</span>
+        </div>
+            """
+        
+        invoice_html += f"""
+    </div>
+    
+    <div class="total">
+        <div class="info-row" style="border: none;">
+            <span class="label">TOTAL AMOUNT PAID:</span>
+            <span class="value">₹{amount_inr:.2f}</span>
+        </div>
+    </div>
+    
+    <div class="footer">
+        <p>Thank you for your business!</p>
+        <p>PII SENTINEL - Secure PII Detection & Protection</p>
+        <p>For support, contact: support@piisentinel.com</p>
+    </div>
+</body>
+</html>
+        """
+        
+        # Return HTML as downloadable file
+        response = make_response(invoice_html)
+        response.headers['Content-Type'] = 'text/html'
+        response.headers['Content-Disposition'] = f'attachment; filename=invoice_{payment_id}.html'
+        
+        return response
+        
+    except Exception as e:
+        logger.error(f"Error generating invoice: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# TEMPORARY ADMIN ENDPOINT - DELETE AFTER USE
+@app.route('/api/admin/fix-plan', methods=['POST'])
+def admin_fix_plan():
+    """TEMPORARY: Manually fix user plan after failed payment update."""
+    try:
+        data = request.get_json()
+        admin_key = data.get('admin_key')
+        user_email = data.get('email')
+        plan_id = data.get('plan_id', 'professional')
+        billing_period = data.get('billing_period', 'monthly')
+        
+        # Simple admin authentication
+        if admin_key != 'fix-payment-issue-2024':
+            return jsonify({'error': 'Unauthorized'}), 401
+        
+        if not user_email:
+            return jsonify({'error': 'Email is required'}), 400
+        
+        logger.info(f"🔧 ADMIN: Manually updating plan for {user_email} to {plan_id}")
+        
+        # Update the plan
+        result = mongo_client.update_user_plan(user_email, plan_id, billing_period)
+        
+        if result:
+            logger.info(f"✅ ADMIN: Successfully updated {user_email} to {plan_id}")
+            invalidate_profile_cache(user_email)
+            
+            # Fetch updated user info
+            user = mongo_client.get_user_by_email(user_email)
+            
+            return jsonify({
+                'success': True,
+                'message': f'Successfully updated {user_email} to {plan_id} plan',
+                'plan_id': user.get('plan_id'),
+                'tokens_balance': user.get('tokens_balance'),
+                'tokens_total': user.get('tokens_total'),
+                'features_enabled': user.get('features_enabled')
+            })
+        else:
+            logger.error(f"❌ ADMIN: Failed to update plan for {user_email}")
+            return jsonify({'error': 'Failed to update plan'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error in admin fix-plan: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================
+# ANALYSIS REPORT GENERATION
+# ============================================
+
+@app.route('/api/batch/<batch_id>/generate-report', methods=['POST'])
+@require_api_key
+@require_auth
+def generate_analysis_report(batch_id):
+    """Generate comprehensive PDF report for batch analysis."""
+    try:
+        from reportlab.lib.pagesizes import A4, landscape
+        from reportlab.lib import colors
+        from reportlab.lib.units import mm, inch
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image as RLImage
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
+        from reportlab.pdfgen import canvas as pdf_canvas
+        from io import BytesIO
+        import tempfile
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        data = request.get_json()
+        user_email = data.get('email')
+        
+        if not user_email:
+            return jsonify({'error': 'User email is required'}), 400
+        
+        # Get batch analysis data
+        batch = mongo_client.get_batch(batch_id)
+        if not batch:
+            return jsonify({'error': 'Batch not found'}), 404
+        
+        # Get token consumption data
+        user = mongo_client.get_user_by_email(user_email)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        files = batch.get('files', [])
+        stats = batch.get('stats', {})
+        total_piis = stats.get('piis', 0)
+        breakdown = stats.get('breakdown', {})
+        
+        # Generate charts
+        temp_chart_dir = os.path.join(os.getcwd(), 'temp_charts')
+        os.makedirs(temp_chart_dir, exist_ok=True)
+        
+        # Generate pie chart
+        pie_chart_path = os.path.join(temp_chart_dir, f'pie_{batch_id}.png')
+        sorted_breakdown = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)[:12]
+        
+        if sorted_breakdown:
+            labels = [item[0] for item in sorted_breakdown]
+            sizes = [item[1] for item in sorted_breakdown]
+            
+            fig, ax = plt.subplots(figsize=(8, 6))
+            colors_pie = plt.cm.Set3(np.linspace(0, 1, len(labels)))
+            wedges, texts, autotexts = ax.pie(sizes, labels=labels, autopct='%1.1f%%',
+                                               colors=colors_pie, startangle=90)
+            ax.set_title('PII Type Distribution (Top 12)', fontsize=14, fontweight='bold', pad=20)
+            
+            # Make percentage text more readable
+            for autotext in autotexts:
+                autotext.set_color('white')
+                autotext.set_fontweight('bold')
+                autotext.set_fontsize(9)
+            
+            # Make labels more readable
+            for text in texts:
+                text.set_fontsize(8)
+            
+            plt.tight_layout()
+            plt.savefig(pie_chart_path, dpi=150, bbox_inches='tight')
+            plt.close()
+        
+        # Generate bar chart
+        bar_chart_path = os.path.join(temp_chart_dir, f'bar_{batch_id}.png')
+        top_10 = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)[:10]
+        
+        if top_10:
+            labels_bar = [item[0][:15] for item in top_10]  # Truncate long labels
+            values_bar = [item[1] for item in top_10]
+            
+            fig, ax = plt.subplots(figsize=(10, 6))
+            bars = ax.barh(labels_bar, values_bar, color='#667eea')
+            ax.set_xlabel('Count', fontsize=11, fontweight='bold')
+            ax.set_title('Top 10 PII Types (Count)', fontsize=14, fontweight='bold', pad=20)
+            ax.invert_yaxis()  # Highest on top
+            
+            # Add value labels on bars
+            for bar in bars:
+                width = bar.get_width()
+                ax.text(width, bar.get_y() + bar.get_height()/2, f'{int(width)}',
+                       ha='left', va='center', fontweight='bold', fontsize=9)
+            
+            plt.tight_layout()
+            plt.savefig(bar_chart_path, dpi=150, bbox_inches='tight')
+            plt.close()
+        
+        # Create PDF buffer
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            buffer,
+            pagesize=A4,
+            topMargin=15*mm,
+            bottomMargin=15*mm,
+            leftMargin=20*mm,
+            rightMargin=20*mm
+        )
+        
+        # Container for PDF elements
+        story = []
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#4F46E5'),
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+        
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#1e40af'),
+            spaceAfter=10,
+            spaceBefore=15,
+            fontName='Helvetica-Bold'
+        )
+        
+        subheading_style = ParagraphStyle(
+            'CustomSubHeading',
+            parent=styles['Heading3'],
+            fontSize=12,
+            textColor=colors.HexColor('#4338CA'),
+            spaceAfter=8,
+            spaceBefore=10,
+            fontName='Helvetica-Bold'
+        )
+        
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['BodyText'],
+            fontSize=10,
+            spaceAfter=6,
+            fontName='Helvetica'
+        )
+        
+        # PAGE 1: Cover Page with Company Info
+        story.append(Spacer(1, 50))
+        story.append(Paragraph("PII SENTINEL", title_style))
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("Comprehensive Analysis Report", heading_style))
+        story.append(Spacer(1, 30))
+        
+        # About section
+        story.append(Paragraph("<b>About PII Sentinel</b>", subheading_style))
+        about_text = """
+        PII Sentinel is an enterprise-grade solution for detecting, analyzing, and protecting 
+        Personally Identifiable Information (PII) in your documents. Our advanced AI-powered 
+        system helps organizations maintain compliance with data protection regulations while 
+        securing sensitive information.
+        """
+        story.append(Paragraph(about_text, body_style))
+        story.append(Spacer(1, 15))
+        
+        story.append(Paragraph("<b>Our Product</b>", subheading_style))
+        product_text = """
+        • Automated PII Detection across 50+ data types<br/>
+        • Real-time Risk Assessment and Compliance Scoring<br/>
+        • Advanced Masking and Redaction Capabilities<br/>
+        • Comprehensive Analytics and Reporting<br/>
+        • Enterprise-grade Security and Encryption
+        """
+        story.append(Paragraph(product_text, body_style))
+        story.append(Spacer(1, 20))
+        
+        # Report metadata
+        report_data = [
+            ['Report Generated:', datetime.utcnow().strftime('%B %d, %Y at %I:%M %p UTC')],
+            ['Generated By:', user.get('fullName', user_email)],
+            ['Batch ID:', batch_id],
+            ['Batch Name:', batch.get('name', 'N/A')]
+        ]
+        report_table = Table(report_data, colWidths=[120, 300])
+        report_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, -1), 'Helvetica', 9),
+            ('FONT', (0, 0), (0, -1), 'Helvetica-Bold', 9),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#4338CA')),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('PADDING', (0, 0), (-1, -1), 6),
+        ]))
+        story.append(report_table)
+        
+        story.append(PageBreak())
+        
+        # PAGE 2: Table of Contents
+        story.append(Paragraph("Table of Contents", heading_style))
+        story.append(Spacer(1, 10))
+        
+        toc_data = [
+            ['Section', 'Page'],
+            ['1. Executive Summary', '3'],
+            ['2. Analysis Statistics', '4'],
+            ['3. PII Detection Results', '5'],
+            ['4. Risk Assessment', '6'],
+            ['5. Token Usage', '7'],
+            ['6. Detailed PII Breakdown', '8+']
+        ]
+        toc_table = Table(toc_data, colWidths=[350, 80])
+        toc_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 11),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 10),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('ALIGN', (1, 0), (1, -1), 'CENTER'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(toc_table)
+        
+        story.append(PageBreak())
+        
+        # PAGE 3+: Analysis Header & Statistics
+        story.append(Paragraph("1. Analysis Overview", heading_style))
+        
+        # Analysis Header Stats (same as frontend)
+        header_stats = [
+            ['Metric', 'Value'],
+            ['Total Files Processed', str(len(files))],
+            ['Total PIIs Detected', str(total_piis)],
+            ['Unique PII Types', str(len(breakdown))],
+            ['Batch Name', batch.get('name', 'N/A')],
+            ['Batch Status', batch.get('status', 'N/A').upper()],
+            ['Processing Date', batch.get('created_at', datetime.utcnow()).strftime('%B %d, %Y %I:%M %p')],
+        ]
+        header_table = Table(header_stats, colWidths=[200, 230])
+        header_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 12),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 11),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('FONT', (0, 1), (0, -1), 'Helvetica-Bold', 11),
+            ('TEXTCOLOR', (0, 1), (0, -1), colors.HexColor('#4338CA')),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 10),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(header_table)
+        story.append(Spacer(1, 20))
+        
+        # Add Pie Chart
+        story.append(Paragraph("2. PII Type Distribution", heading_style))
+        if os.path.exists(pie_chart_path):
+            pie_img = RLImage(pie_chart_path, width=450, height=338)
+            story.append(pie_img)
+            story.append(Spacer(1, 15))
+        
+        story.append(PageBreak())
+        
+        # Add Bar Chart
+        story.append(Paragraph("3. Top PII Types Analysis", heading_style))
+        if os.path.exists(bar_chart_path):
+            bar_img = RLImage(bar_chart_path, width=480, height=288)
+            story.append(bar_img)
+            story.append(Spacer(1, 15))
+        
+        story.append(PageBreak())
+        # Executive Summary
+        story.append(Paragraph("4. Executive Summary", heading_style))
+        
+        summary_text = f"""
+        This report contains a comprehensive analysis of {len(files)} file(s) processed in batch "{batch.get('name', 'N/A')}". 
+        Our system detected a total of <b>{total_piis} PII instances</b> across <b>{len(breakdown)} different PII types</b>.
+        """
+        story.append(Paragraph(summary_text, body_style))
+        story.append(Spacer(1, 15))
+        
+        # Key metrics
+        story.append(Paragraph("5. Analysis Statistics", heading_style))
+        
+        stats_data = [
+            ['Metric', 'Value'],
+            ['Total Files Analyzed', str(len(files))],
+            ['Total PIIs Detected', str(total_piis)],
+            ['Unique PII Types', str(len(breakdown))],
+            ['Batch Status', batch.get('status', 'N/A').upper()],
+            ['Created Date', batch.get('created_at', datetime.utcnow()).strftime('%B %d, %Y')],
+        ]
+        stats_table = Table(stats_data, colWidths=[250, 180])
+        stats_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 11),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 10),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('FONT', (0, 1), (0, -1), 'Helvetica-Bold', 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(stats_table)
+        story.append(Spacer(1, 15))
+        
+        # PII Type Distribution
+        story.append(Paragraph("6. PII Detection Results", heading_style))
+        story.append(Paragraph("PII Type Distribution (All Types)", subheading_style))
+        
+        # Sort breakdown by count - SHOW ALL, not just top 15
+        sorted_breakdown = sorted(breakdown.items(), key=lambda x: x[1], reverse=True)
+        
+        pii_data = [['PII Type', 'Count', '% of Total']]
+        for pii_type, count in sorted_breakdown:
+            percentage = (count / total_piis * 100) if total_piis > 0 else 0
+            pii_data.append([pii_type, str(count), f"{percentage:.1f}%"])
+        
+        pii_table = Table(pii_data, colWidths=[250, 90, 90])
+        pii_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 11),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 9),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 6),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]),
+        ]))
+        story.append(pii_table)
+        
+        story.append(PageBreak())
+        
+        # Risk Assessment
+        story.append(Paragraph("7. Risk Assessment", heading_style))
+        
+        # Calculate risk score
+        high_risk_types = ['AADHAAR', 'PAN', 'PASSPORT', 'BANK_ACCOUNT', 'CREDIT_CARD', 'PASSWORD', 'API_KEY']
+        high_risk_count = sum(count for pii_type, count in breakdown.items() if any(hr in pii_type.upper() for hr in high_risk_types))
+        risk_score = min(100, int((high_risk_count / max(total_piis, 1)) * 100) + 20)
+        
+        risk_level = 'LOW' if risk_score < 40 else 'MEDIUM' if risk_score < 70 else 'HIGH'
+        risk_color = colors.green if risk_score < 40 else colors.orange if risk_score < 70 else colors.red
+        
+        risk_data = [
+            ['Risk Metric', 'Value'],
+            ['Overall Risk Score', f"{risk_score}/100"],
+            ['Risk Level', risk_level],
+            ['High-Risk PIIs Detected', str(high_risk_count)],
+            ['Sensitive Data Types', str(len([p for p in breakdown.keys() if any(hr in p.upper() for hr in high_risk_types)]))]
+        ]
+        risk_table = Table(risk_data, colWidths=[250, 180])
+        risk_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 11),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 10),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('FONT', (0, 1), (0, -1), 'Helvetica-Bold', 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(risk_table)
+        story.append(Spacer(1, 15))
+        
+        # Token Usage
+        story.append(Paragraph("8. Token Usage", heading_style))
+        
+        token_data = [
+            ['Token Metric', 'Value'],
+            ['Current Plan', user.get('plan_id', 'starter').upper()],
+            ['Total Tokens', str(user.get('tokens_total', 0)) if user.get('tokens_total') is not None else 'Unlimited'],
+            ['Tokens Used', str(user.get('tokens_used', 0))],
+            ['Tokens Balance', str(user.get('tokens_balance', 0)) if user.get('tokens_balance') is not None else 'Unlimited'],
+            ['Report Generation Cost', '100 tokens']
+        ]
+        token_table = Table(token_data, colWidths=[250, 180])
+        token_table.setStyle(TableStyle([
+            ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 11),
+            ('FONT', (0, 1), (-1, -1), 'Helvetica', 10),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+            ('FONT', (0, 1), (0, -1), 'Helvetica-Bold', 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('PADDING', (0, 0), (-1, -1), 8),
+        ]))
+        story.append(token_table)
+        
+        story.append(PageBreak())
+        
+        # Detailed PII Breakdown by File - SHOW ALL PIIs, not just 50
+        story.append(Paragraph("9. Detailed PII Breakdown", heading_style))
+        
+        # Show ALL files, not just first 10
+        for idx, file in enumerate(files, 1):
+            story.append(Paragraph(f"File {idx}: {file.get('filename', 'Unknown')}", subheading_style))
+            
+            file_piis = file.get('piis', [])
+            if not file_piis:
+                story.append(Paragraph("No PIIs detected in this file.", body_style))
+                story.append(Spacer(1, 10))
+                continue
+            
+            # Create detailed table for this file - SHOW ALL PIIs
+            file_pii_data = [['#', 'PII Type', 'Value', 'Confidence']]
+            for pii_idx, pii in enumerate(file_piis, 1):
+                pii_type = pii.get('type', 'Unknown')
+                pii_value = pii.get('value', 'N/A')
+                # Mask sensitive values
+                if len(str(pii_value)) > 20:
+                    pii_value = str(pii_value)[:17] + '...'
+                confidence = f"{pii.get('confidence', 0.9) * 100:.0f}%"
+                file_pii_data.append([str(pii_idx), pii_type, str(pii_value), confidence])
+            
+            file_pii_table = Table(file_pii_data, colWidths=[30, 120, 200, 70])
+            file_pii_table.setStyle(TableStyle([
+                ('FONT', (0, 0), (-1, 0), 'Helvetica-Bold', 9),
+                ('FONT', (0, 1), (-1, -1), 'Helvetica', 8),
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#E0E7FF')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1e40af')),
+                ('ALIGN', (0, 0), (0, -1), 'CENTER'),
+                ('ALIGN', (3, 1), (3, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+                ('PADDING', (0, 0), (-1, -1), 4),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F9FAFB')]),
+            ]))
+            story.append(file_pii_table)
+            story.append(Spacer(1, 15))
+            
+            # Add page break after each file for better readability
+            if idx < len(files):
+                story.append(PageBreak())
+        
+        # Add page numbers and branding
+        def add_page_decorations(canvas, doc):
+            canvas.saveState()
+            # Brand name top left
+            canvas.setFont('Helvetica-Bold', 10)
+            canvas.setFillColor(colors.HexColor('#4F46E5'))
+            canvas.drawString(20*mm, A4[1] - 10*mm, "PII SENTINEL")
+            
+            # Page number bottom center
+            canvas.setFont('Helvetica', 9)
+            canvas.setFillColor(colors.grey)
+            page_num = canvas.getPageNumber()
+            canvas.drawCentredString(A4[0] / 2, 10*mm, f"Page {page_num}")
+            
+            canvas.restoreState()
+        
+        # Build PDF
+        doc.build(story, onFirstPage=add_page_decorations, onLaterPages=add_page_decorations)
+        
+        # Get PDF bytes
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        
+        # Clean up temporary chart files
+        try:
+            if os.path.exists(pie_chart_path):
+                os.remove(pie_chart_path)
+            if os.path.exists(bar_chart_path):
+                os.remove(bar_chart_path)
+        except Exception as e:
+            logger.warning(f"Failed to clean up chart files: {e}")
+        
+        # Save to temp file
+        temp_dir = os.path.join(os.getcwd(), 'temp_reports')
+        os.makedirs(temp_dir, exist_ok=True)
+        
+        report_filename = f"PII_Sentinel_Report_{batch_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.pdf"
+        report_path = os.path.join(temp_dir, report_filename)
+        
+        with open(report_path, 'wb') as f:
+            f.write(pdf_bytes)
+        
+        # Deduct tokens for report generation (100 tokens)
+        debit_result = mongo_client.debit_tokens(
+            user_email,
+            100,
+            'generate_analysis_report',
+            {'batch_id': batch_id, 'report_filename': report_filename}
+        )
+        
+        if not debit_result.get('success'):
+            # Clean up file if token deduction failed
+            if os.path.exists(report_path):
+                os.remove(report_path)
+            return jsonify({'error': debit_result.get('error', 'Insufficient tokens')}), 400
+        
+        # Invalidate cache after token deduction
+        invalidate_profile_cache(user_email)
+        
+        logger.info(f"✅ Generated analysis report for batch {batch_id}: {report_filename}")
+        
+        return jsonify({
+            'success': True,
+            'filename': report_filename,
+            'download_url': f'/api/batch/{batch_id}/download-report?filename={report_filename}',
+            'tokens_used': 100,
+            'tokens_remaining': debit_result.get('balance')
+        })
+        
+    except Exception as e:
+        logger.error(f"Error generating analysis report: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/batch/<batch_id>/download-report', methods=['GET'])
+@require_api_key
+def download_analysis_report(batch_id):
+    """Download generated analysis report."""
+    try:
+        filename = request.args.get('filename')
+        if not filename:
+            return jsonify({'error': 'Filename is required'}), 400
+        
+        report_path = os.path.join(os.getcwd(), 'temp_reports', filename)
+        
+        if not os.path.exists(report_path):
+            return jsonify({'error': 'Report not found'}), 404
+        
+        return send_file(
+            report_path,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=filename
+        )
+        
+    except Exception as e:
+        logger.error(f"Error downloading analysis report: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/batch/<batch_id>/share-report', methods=['POST'])
+@require_api_key
+@require_auth
+def share_analysis_report(batch_id):
+    """Generate shareable link for analysis report."""
+    try:
+        data = request.get_json()
+        filename = data.get('filename')
+        share_method = data.get('method')  # 'email', 'whatsapp', 'link'
+        recipient = data.get('recipient')  # email address or phone number
+        
+        if not filename:
+            return jsonify({'error': 'Filename is required'}), 400
+        
+        report_path = os.path.join(os.getcwd(), 'temp_reports', filename)
+        
+        if not os.path.exists(report_path):
+            return jsonify({'error': 'Report not found'}), 404
+        
+        # Generate shareable link (valid for 7 days)
+        share_token = str(uuid.uuid4())
+        expiry = datetime.utcnow() + timedelta(days=7)
+        
+        # Store share token in database
+        mongo_client.db['ReportShares'].insert_one({
+            'share_token': share_token,
+            'batch_id': batch_id,
+            'filename': filename,
+            'created_at': datetime.utcnow(),
+            'expires_at': expiry,
+            'shared_by': data.get('email'),
+            'share_method': share_method,
+            'recipient': recipient
+        })
+        
+        share_url = f"{os.getenv('FRONTEND_URL', 'http://localhost:3000')}/shared-report/{share_token}"
+        
+        response_data = {
+            'success': True,
+            'share_url': share_url,
+            'expires_at': expiry.isoformat(),
+            'share_method': share_method
+        }
+        
+        # Generate method-specific sharing content
+        if share_method == 'whatsapp':
+            whatsapp_text = f"View PII Sentinel Analysis Report: {share_url}"
+            response_data['whatsapp_url'] = f"https://wa.me/?text={requests.utils.quote(whatsapp_text)}"
+        
+        elif share_method == 'email':
+            response_data['email_subject'] = "PII Sentinel Analysis Report"
+            response_data['email_body'] = f"Please find the PII Sentinel analysis report here: {share_url}\n\nThis link expires on {expiry.strftime('%B %d, %Y')}."
+        
+        logger.info(f"✅ Generated share link for report {filename}: {share_token}")
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Error sharing analysis report: {e}", exc_info=True)
+        return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.getenv('FLASK_PORT', 5000))

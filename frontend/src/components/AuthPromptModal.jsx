@@ -68,29 +68,41 @@ function AuthPromptModal({ isOpen, onClose }) {
           {/* Feature Highlights */}
           <div className="auth-modal-features">
             <div className="feature-item">
-              <div className="feature-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+              <span
+                className="feature-icon"
+                aria-hidden="true"
+                style={{ width: 20, height: 20, minWidth: 20 }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
                 </svg>
-              </div>
-              <span>Create & Manage Batches</span>
+              </span>
+              <span className="feature-text">Create &amp; Manage Batches</span>
             </div>
             <div className="feature-item">
-              <div className="feature-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <span
+                className="feature-icon"
+                aria-hidden="true"
+                style={{ width: 20, height: 20, minWidth: 20 }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
                 </svg>
-              </div>
-              <span>Secure PII Detection</span>
+              </span>
+              <span className="feature-text">Secure PII Detection</span>
             </div>
             <div className="feature-item">
-              <div className="feature-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M9 11l3 3L22 4"></path>
-                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+              <span
+                className="feature-icon"
+                aria-hidden="true"
+                style={{ width: 20, height: 20, minWidth: 20 }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M9 11l3 3L22 4" />
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
                 </svg>
-              </div>
-              <span>Fast Results</span>
+              </span>
+              <span className="feature-text">Fast Results</span>
             </div>
           </div>
 

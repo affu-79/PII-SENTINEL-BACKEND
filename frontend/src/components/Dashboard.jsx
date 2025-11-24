@@ -23,6 +23,12 @@ function Dashboard() {
 
   const { tokenAccount, featuresEnabled, refresh: refreshTokenAccount } = useTokenAccount();
 
+  // Debug: Log features to console
+  useEffect(() => {
+    console.log('Dashboard - tokenAccount:', tokenAccount);
+    console.log('Dashboard - featuresEnabled:', featuresEnabled);
+  }, [tokenAccount, featuresEnabled]);
+
   const loadBatches = useCallback(async () => {
     setLoadingBatches(true);
     try {
@@ -54,6 +60,12 @@ function Dashboard() {
   }, []);
 
   const loadAnalysis = useCallback(async (batchId) => {
+    if (!batchId) {
+      setAnalysis(null);
+      setSelectedBatchName('');
+      return;
+    }
+    
     setLoading(true);
     console.log("Dashboard - Loading analysis for batch:", batchId);
     try {
@@ -65,7 +77,17 @@ function Dashboard() {
           },
         }
       );
-      if (!response.ok) throw new Error('Failed to load analysis');
+      
+      if (!response.ok) {
+        if (response.status === 404) {
+          console.warn('Batch not found - may have been deleted');
+          setAnalysis(null);
+          setSelectedBatch(null); // Clear selection
+          return;
+        }
+        throw new Error('Failed to load analysis');
+      }
+      
       const data = await response.json();
       console.log('📊 Analysis data loaded:', data);
       console.log('📊 Files count:', data.files?.length || 0);
@@ -76,6 +98,8 @@ function Dashboard() {
     } catch (error) {
       console.error('Error loading analysis:', error);
       setAnalysis(null);
+      // Clear selection if batch doesn't exist
+      setSelectedBatch(null);
     } finally {
       setLoading(false);
     }
@@ -154,6 +178,7 @@ function Dashboard() {
       <Sidebar
         batches={batches}
         selectedBatch={selectedBatch}
+        currentAnalysis={analysis}
         onBatchSelect={(batchId) => {
           handleBatchSelected(batchId);
           setSidebarOpen(false); // Close sidebar on tablet/mobile after selection

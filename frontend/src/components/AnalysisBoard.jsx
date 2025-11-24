@@ -12,7 +12,7 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
-import { FiBarChart2 } from 'react-icons/fi';
+import { FiBarChart2, FiTrendingUp, FiArrowRight, FiDownload } from 'react-icons/fi';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { useNavigate } from 'react-router-dom';
@@ -20,6 +20,7 @@ import { maskFiles, downloadFile, exportPiiJson, getFilePiis, consumeTokenAction
 import AnalysisHeader from './AnalysisHeader';
 import AdvancedPIIAnalysis from './AdvancedPIIAnalysis';
 import FeatureUpgradeModal from './FeatureUpgradeModal';
+import './AnalysisBoard.css';
 
 // Hook to detect mobile screen size
 const useIsMobile = () => {
@@ -67,6 +68,7 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
   const features = featuresEnabled || {};
   const canLockJson = !!features.lock_json;
   const canAdvanced = !!features.advanced_analysis;
+  const canExportJson = !!features.export_json;
 
   const getStoredUser = () => {
     if (typeof window === 'undefined') {
@@ -199,7 +201,7 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
 
   const filteredPiiDetails = useMemo(() => {
     let details = [];
-    
+
     // Debug: Log the analysis structure
     if (analysis?.files) {
       console.log('📊 Analysis files:', analysis.files.length);
@@ -207,18 +209,18 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       console.log('⚠️ No analysis.files found');
       console.log('   analysis structure:', analysis);
     }
-    
+
     if (analysis?.files && Array.isArray(analysis.files)) {
       analysis.files.forEach(file => {
         // Handle both 'piis' and alternative field names
-        const filePiis = Array.isArray(file.piis) ? file.piis : 
-                        Array.isArray(file.piiDetails) ? file.piiDetails :
-                        Array.isArray(file.detected_piis) ? file.detected_piis : [];
-        
+        const filePiis = Array.isArray(file.piis) ? file.piis :
+          Array.isArray(file.piiDetails) ? file.piiDetails :
+            Array.isArray(file.detected_piis) ? file.detected_piis : [];
+
         if (filePiis.length > 0) {
           console.log(`  📄 File: ${file.filename || 'unknown'}, PIIs: ${filePiis.length}`);
         }
-        
+
         filePiis.forEach(pii => {
           if (pii && pii.type && pii.value !== undefined) {
             details.push({
@@ -240,10 +242,11 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       console.log(`  Filtered by type ${selectedPiiType}: ${details.length}`);
     }
 
-    // Only filter by categories if some are selected, otherwise show all
+    // Filter by selected PII types (not categories)
     if (selectedPiiCategories.size > 0) {
-      details = details.filter(pii => selectedPiiCategories.has(getPiiCategory(pii.type)));
-      console.log(`  Filtered by categories: ${details.length}`);
+      details = details.filter(pii => selectedPiiCategories.has(pii.type));
+      console.log(`  Filtered by selected types: ${details.length}`);
+      console.log(`  Selected types:`, Array.from(selectedPiiCategories));
     }
 
     console.log(`✅ Final filtered PIIs: ${details.length}`);
@@ -366,13 +369,8 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
 
   // Initialize selected categories with all PII types by default
   useEffect(() => {
-    if (allPiiTypes.size > 0 && selectedPiiCategories.size === 0) {
-      // Create a set of all unique categories from the PII types
-      const categories = new Set();
-      allPiiTypes.forEach(type => {
-        categories.add(getPiiCategory(type));
-      });
-      setSelectedPiiCategories(categories);
+    if (allPiiTypes.length > 0 && selectedPiiCategories.size === 0) {
+      setSelectedPiiCategories(new Set(allPiiTypes));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allPiiTypes]);
@@ -387,6 +385,13 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       }
       return newSet;
     });
+  };
+
+  const selectAllPiiCategories = () => {
+    if (!allPiiTypes || allPiiTypes.length === 0) {
+      return;
+    }
+    setSelectedPiiCategories(new Set(allPiiTypes));
   };
 
   const handleMask = async () => {
@@ -419,7 +424,31 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
   };
 
   const handleDownload = async (url) => {
+    const user = getStoredUser();
+    if (!user?.email) {
+      alert('Please sign in to download masked files.');
+      navigate('/signup');
+      return;
+    }
+
+    // Check tokens before downloading
+    let { snapshot, isUnlimited, balance } = computeTokenBudget();
+    if (!snapshot) {
+      await refreshTokens();
+      ({ snapshot, isUnlimited, balance } = computeTokenBudget());
+    }
+
+    const requiredTokens = 5;
+    if (!isUnlimited && balance < requiredTokens) {
+      openUpgradePrompt(
+        'download_masked',
+        `Downloading a masked file costs ${requiredTokens} tokens. You currently have ${balance} token${balance === 1 ? '' : 's'} remaining.`
+      );
+      return;
+    }
+
     try {
+      // FIRST: Try to download the file
       const path = url.replace('/api/download?path=', '');
       const blob = await downloadFile(path);
       const downloadUrl = window.URL.createObjectURL(blob);
@@ -430,6 +459,22 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(downloadUrl);
+
+      // SUCCESS: Download worked, now track token usage (even for unlimited)
+      try {
+        await consumeTokenAction({
+          action: 'download_masked_file',
+          userEmail: user.email,
+          metadata: {
+            batch_id: batchId,
+            file_url: url
+          }
+        });
+        await refreshTokens();
+      } catch (error) {
+        console.error('Token tracking failed after successful download', error);
+        // Don't fail the operation - user already got the file
+      }
     } catch (error) {
       console.error('Error downloading file:', error);
       alert('Download failed: ' + (error.response?.data?.error || error.message));
@@ -448,12 +493,38 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
   const handleDownloadAll = async () => {
     if (!downloadLinks || !downloadLinks.download_urls) return;
 
+    const user = getStoredUser();
+    if (!user?.email) {
+      alert('Please sign in to download masked files.');
+      navigate('/signup');
+      return;
+    }
+
+    const totalFiles = downloadLinks.download_urls.length;
+    const tokensPerFile = 5;
+    const totalTokensRequired = totalFiles * tokensPerFile;
+
+    // Check tokens before downloading
+    let { snapshot, isUnlimited, balance } = computeTokenBudget();
+    if (!snapshot) {
+      await refreshTokens();
+      ({ snapshot, isUnlimited, balance } = computeTokenBudget());
+    }
+
+    if (!isUnlimited && balance < totalTokensRequired) {
+      openUpgradePrompt(
+        'download_masked',
+        `Downloading all ${totalFiles} masked files costs ${totalTokensRequired} tokens (${tokensPerFile} tokens per file). You currently have ${balance} token${balance === 1 ? '' : 's'} remaining.`
+      );
+      return;
+    }
+
     setZippingFiles(true);
     setZipProgress('Preparing zip...');
 
     try {
+      // FIRST: Try to download all files and create zip
       const zip = new JSZip();
-      const totalFiles = downloadLinks.download_urls.length;
       let completed = 0;
 
       // Download all files and add to zip
@@ -493,15 +564,34 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       // Download the zip file
       saveAs(zipBlob, zipFileName);
 
+      // SUCCESS: Zip created and downloaded, now track token usage (even for unlimited)
+      try {
+        // Track tokens for all files
+        for (let i = 0; i < totalFiles; i++) {
+          await consumeTokenAction({
+            action: 'download_masked_file',
+            userEmail: user.email,
+            metadata: {
+              batch_id: batchId,
+              file_index: i + 1,
+              total_files: totalFiles
+            }
+          });
+        }
+        await refreshTokens();
+      } catch (error) {
+        console.error('Token tracking failed after successful download all', error);
+        // Don't fail the operation - user already got the files
+      }
+
       setZippingFiles(false);
       setZipProgress('');
 
       // Show success toast
       showToastMessage(`✅ All ${totalFiles} masked files have been zipped and downloaded. You can extract them to view all masked results.`);
-
     } catch (error) {
       console.error('Error creating zip:', error);
-      alert('Failed to create zip file: ' + (error.response?.data?.error || error.message));
+      alert('Failed to create zip: ' + (error.message || 'Unknown error'));
       setZippingFiles(false);
       setZipProgress('');
     }
@@ -519,10 +609,10 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
     }
 
     const selectedTypes = exportOnlySelected ? Array.from(selectedPiiCategories) : [];
-    let consumedTokens = false;
 
     setExportingJson(true);
     try {
+      // Check if locked export is requested
       if (exportJsonLocked) {
         if (!canLockJson) {
           setExportingJson(false);
@@ -536,7 +626,7 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
           ({ snapshot, isUnlimited, balance } = computeTokenBudget());
         }
 
-        const requiredTokens = 5;
+        const requiredTokens = 50;
         if (!isUnlimited && balance < requiredTokens) {
           setExportingJson(false);
           openUpgradePrompt(
@@ -554,32 +644,10 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
           return;
         }
 
-        try {
-          await consumeTokenAction({
-            action: 'lock_json',
-            userEmail: user.email,
-            metadata: {
-              batch_id: batchId,
-              pii_types: selectedTypes,
-              export_only_selected: exportOnlySelected
-            }
-          });
-          consumedTokens = true;
-        } catch (error) {
-          console.error('Token deduction failed for lock_json export', error);
-          const message = error.response?.data?.error || error.message || 'Unable to deduct tokens for this action.';
-          openUpgradePrompt(
-            'lock_json',
-            message.includes('INSUFFICIENT')
-              ? 'Your token balance fell below the required 5 tokens while exporting. Please top up tokens to continue locking JSON exports.'
-              : message
-          );
-          setExportingJson(false);
-          await refreshTokens();
-          return;
-        }
+        // Don't deduct tokens yet - wait until export succeeds
       }
 
+      // FIRST: Try to export the JSON
       const response = await exportPiiJson(
         batchId,
         selectedTypes,
@@ -587,7 +655,10 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
         exportJsonLocked
       );
 
-      const jsonString = JSON.stringify(response || {}, null, 2);
+      // SUCCESS: Export worked, now download it
+      // For encrypted files, save only the 'data' field; for unencrypted, save the 'data' field as well
+      const dataToSave = response.encrypted ? response.data : response.data;
+      const jsonString = JSON.stringify(dataToSave || {}, null, 2);
       const blob = new Blob([jsonString], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -600,18 +671,41 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      showToastMessage('✅ JSON export is ready. Download the file from the section below.');
+      // SUCCESS: Now deduct tokens for locked export (track usage even for unlimited)
+      if (exportJsonLocked) {
+        const user = getStoredUser();
+        console.log('🔍 Attempting to track lock_json token usage for user:', user?.email);
 
-      if (consumedTokens) {
-        await refreshTokens();
+        if (user?.email) {
+          try {
+            console.log('📊 Calling consumeTokenAction for lock_json (50 tokens)');
+            const tokenResult = await consumeTokenAction({
+              action: 'lock_json',
+              userEmail: user.email,
+              metadata: {
+                batch_id: batchId,
+                pii_types: selectedTypes,
+                export_only_selected: exportOnlySelected
+              }
+            });
+            console.log('✅ Token tracking successful:', tokenResult);
+            await refreshTokens();
+            console.log('✅ Token balance refreshed');
+          } catch (error) {
+            console.error('❌ Token tracking failed after successful lock_json export:', error);
+            console.error('   Error details:', error.response?.data || error.message);
+            // Don't fail the operation - user already got the file
+          }
+        } else {
+          console.warn('⚠️ User email not found, skipping token tracking');
+        }
       }
+
+      showToastMessage('✅ JSON export is ready. Download the file from the section below.');
     } catch (error) {
       console.error('Error exporting JSON:', error);
       alert('Failed to export JSON: ' + (error.response?.data?.error || error.message));
       setDownloadLinks(null);
-      if (consumedTokens) {
-        await refreshTokens();
-      }
     } finally {
       setExportingJson(false);
     }
@@ -637,17 +731,24 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
         <AdvancedPIIAnalysis analysis={analysis} batchId={batchId} />
       ) : (
         <div className="analysis-upgrade-callout">
+          <div className="analysis-upgrade-callout__glow" aria-hidden="true" />
           <div className="analysis-upgrade-callout__content">
-            <h3>Unlock Advanced Analysis</h3>
-            <p>
-              Dive deeper into risk scoring, predictive insights, and premium dashboards by upgrading to the Professional plan.
-            </p>
+            <div className="analysis-upgrade-callout__icon">
+              <FiTrendingUp />
+            </div>
+            <div className="analysis-upgrade-callout__copy">
+              <h3>Unlock Advanced Analysis</h3>
+              <p>
+                Upgrade to the <strong>Professional</strong> plan to access predictive dashboards, deeper risk scoring, and JSON automation.
+              </p>
+            </div>
           </div>
           <button
             className="analysis-upgrade-callout__button"
             onClick={() => navigate('/pricing')}
           >
-            View plans
+            <span>Explore plans</span>
+            <FiArrowRight />
           </button>
         </div>
       )}
@@ -900,7 +1001,20 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
         {/* PII Category Selection */}
         {allPiiTypes && allPiiTypes.length > 0 && (
           <div className="pii-category-selection">
-            <h4>🏷️ Select PII Categories to Mask:</h4>
+            <div className="pii-category-header">
+              <div className="pii-category-title">
+                <span className="pii-category-icon">🏷️</span>
+                <h4>Select PII Categories to Mask:</h4>
+              </div>
+              <button
+                type="button"
+                className="pii-select-all"
+                onClick={selectAllPiiCategories}
+              >
+                <span className="pii-select-all__wave" aria-hidden="true" />
+                <span className="pii-select-all__label">Select all PII types</span>
+              </button>
+            </div>
             <div className="pii-category-pills">
               {allPiiTypes.map((category) => (
                 <button
@@ -980,94 +1094,119 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
         </button>
 
         {/* Export PII to JSON Section */}
-        <div className="export-json-section">
-          <h4>📥 Export PIIs to JSON File</h4>
-          <p className="export-json-description">
-            Download PIIs in a JSON file with key-value pairs, optionally filtered by type
-          </p>
+        {canExportJson ? (
+          <div className="export-json-section">
+            <h4>📥 Export PIIs to JSON File</h4>
+            <p className="export-json-description">
+              Download PIIs in a JSON file with key-value pairs, optionally filtered by type
+            </p>
 
-          <div className="export-json-options">
-            {/* New Toggle: Export Only Selected PII Types */}
-            <div className="export-filter-toggle-wrapper">
-              <label className="export-filter-label">
-                <span className="filter-icon">🎯</span>
-                <span>Export Only Selected PII Types</span>
-                <div className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={exportOnlySelected}
-                    onChange={(e) => setExportOnlySelected(e.target.checked)}
-                  />
-                  <span className="toggle-slider"></span>
-                </div>
-              </label>
-              <p className="filter-hint">
-                {exportOnlySelected 
-                  ? `${selectedPiiCategories.size} type(s) selected for export`
-                  : 'All PII types will be exported'}
-              </p>
-            </div>
-
-            <div className="lock-toggle-wrapper">
-              <label className="lock-toggle-label">
-                <span>Lock JSON file with password</span>
-                <div className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={exportJsonLocked}
-                    disabled={!canLockJson}
-                    onChange={(e) => {
-                      if (!canLockJson) {
-                        openUpgradePrompt('lock_json', 'Locking JSON exports is available on the Professional plan and above. Upgrade to secure exported PIIs.');
-                        return;
-                      }
-                      setExportJsonLocked(e.target.checked);
-                    }}
-                  />
-                  <span className="toggle-slider"></span>
-                </div>
-              </label>
-            </div>
-
-            {exportJsonLocked && (
-              <div className="password-input-wrapper">
-                <input
-                  type={exportJsonShowPassword ? "text" : "password"}
-                  placeholder="Enter password to lock JSON file"
-                  value={exportJsonPassword}
-                  onChange={(e) => setExportJsonPassword(e.target.value)}
-                  className="password-input"
-                />
-                <button
-                  type="button"
-                  className="password-toggle"
-                  onClick={() => setExportJsonShowPassword(!exportJsonShowPassword)}
-                  title={exportJsonShowPassword ? "Hide password" : "Show password"}
-                >
-                  {exportJsonShowPassword ? (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                      <line x1="1" y1="1" x2="23" y2="23"></line>
-                    </svg>
-                  ) : (
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                      <circle cx="12" cy="12" r="3"></circle>
-                    </svg>
-                  )}
-                </button>
+            <div className="export-json-options">
+              {/* New Toggle: Export Only Selected PII Types */}
+              <div className="export-filter-toggle-wrapper">
+                <label className="export-filter-label">
+                  <span className="filter-icon">🎯</span>
+                  <span>Export Only Selected PII Types</span>
+                  <div className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={exportOnlySelected}
+                      onChange={(e) => setExportOnlySelected(e.target.checked)}
+                    />
+                    <span className="toggle-slider"></span>
+                  </div>
+                </label>
+                <p className="filter-hint">
+                  {exportOnlySelected
+                    ? `${selectedPiiCategories.size} type(s) selected for export`
+                    : 'All PII types will be exported'}
+                </p>
               </div>
-            )}
 
-            <button
-              className="btn-primary btn-export-json"
-              onClick={handleExportJson}
-              disabled={exportingJson || (exportOnlySelected && selectedPiiCategories.size === 0)}
-            >
-              {exportingJson ? 'Exporting...' : 'Download JSON File'}
-            </button>
+              <div className={`lock-toggle-wrapper ${!canLockJson ? 'feature-disabled' : ''}`}>
+                <label className="lock-toggle-label">
+                  <span>Lock JSON file with password</span>
+                  {!canLockJson && (
+                    <span className="feature-badge">Pro/Enterprise</span>
+                  )}
+                  <div className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={exportJsonLocked}
+                      disabled={!canLockJson}
+                      onChange={(e) => {
+                        if (!canLockJson) {
+                          openUpgradePrompt('lock_json', 'Locking JSON exports is available on the Professional plan and above. Upgrade to secure exported PIIs.');
+                          return;
+                        }
+                        setExportJsonLocked(e.target.checked);
+                      }}
+                    />
+                    <span className="toggle-slider"></span>
+                  </div>
+                </label>
+              </div>
+
+              {exportJsonLocked && (
+                <div className="password-input-wrapper">
+                  <input
+                    type={exportJsonShowPassword ? "text" : "password"}
+                    placeholder="Enter password to lock JSON file"
+                    value={exportJsonPassword}
+                    onChange={(e) => setExportJsonPassword(e.target.value)}
+                    className="password-input"
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setExportJsonShowPassword(!exportJsonShowPassword)}
+                    title={exportJsonShowPassword ? "Hide password" : "Show password"}
+                  >
+                    {exportJsonShowPassword ? (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                        <line x1="1" y1="1" x2="23" y2="23"></line>
+                      </svg>
+                    ) : (
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                        <circle cx="12" cy="12" r="3"></circle>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              <button
+                className="btn-primary btn-export-json"
+                onClick={handleExportJson}
+                disabled={exportingJson || (exportOnlySelected && selectedPiiCategories.size === 0)}
+              >
+                {exportingJson ? 'Exporting...' : 'Download JSON File'}
+              </button>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="analysis-upgrade-callout">
+            <div className="analysis-upgrade-callout__glow" aria-hidden="true" />
+            <div className="analysis-upgrade-callout__content">
+              <div className="analysis-upgrade-callout__icon">
+                <FiDownload />
+              </div>
+              <div className="analysis-upgrade-callout__copy">
+                <h3>Unlock JSON Export</h3>
+                <p>Export detected PIIs to JSON files with advanced filtering and encryption options. Available on Professional and Enterprise plans.</p>
+              </div>
+              <button
+                className="analysis-upgrade-callout__button"
+                onClick={() => openUpgradePrompt('export_json', 'JSON export with filtering and encryption is available on the Professional plan and above. Upgrade to download PIIs in structured JSON format.')}
+              >
+                <span>Upgrade to Pro</span>
+                <FiArrowRight />
+              </button>
+            </div>
+          </div>
+        )}
 
         {downloadLinks && analysis && analysis.files && analysis.files.length > 0 && (
           <div className="download-section">
@@ -1082,9 +1221,9 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
               </button>
             ) : (
               <>
-                <div className="download-links">
-                  {/* Show only first 20 files */}
-                  {downloadLinks.download_urls?.slice(0, 20).map((url, idx) => {
+                <div className="download-links" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                  {/* Show only first 5 files */}
+                  {downloadLinks.download_urls?.slice(0, 5).map((url, idx) => {
                     // Get file info for tooltip
                     const fileInfo = downloadLinks.file_info?.[idx];
                     const tooltipText = fileInfo?.descriptive_name ||
@@ -1097,6 +1236,29 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
                         className="btn-download"
                         onClick={() => handleDownload(url)}
                         title={tooltipText}
+                        style={{
+                          padding: '10px 20px',
+                          backgroundColor: '#e8e8e8',
+                          color: '#333',
+                          border: '1px solid #ccc',
+                          borderRadius: '25px',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          fontWeight: '500',
+                          transition: 'all 0.2s',
+                          whiteSpace: 'nowrap',
+                          width: 'auto'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.target.style.backgroundColor = '#d8d8d8';
+                          e.target.style.transform = 'translateY(-2px)';
+                          e.target.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.target.style.backgroundColor = '#e8e8e8';
+                          e.target.style.transform = 'translateY(0)';
+                          e.target.style.boxShadow = 'none';
+                        }}
                       >
                         Download File {idx + 1}
                       </button>
@@ -1104,8 +1266,8 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
                   })}
                 </div>
 
-                {/* Show message if more than 20 files */}
-                {downloadLinks.download_urls && downloadLinks.download_urls.length > 20 && (
+                {/* Show message if more than 5 files */}
+                {downloadLinks.download_urls && downloadLinks.download_urls.length > 5 && (
                   <div className="remaining-files-message" style={{
                     marginTop: '20px',
                     padding: '15px',
@@ -1122,40 +1284,46 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
                       }}>📦</span>
                     </div>
                     <p style={{ margin: 0, color: '#495057', fontWeight: '500' }}>
-                      📦 Remaining masked files are available inside the zip folder.
+                      {downloadLinks.download_urls.length - 5} more file{downloadLinks.download_urls.length - 5 > 1 ? 's' : ''} available.
+                      Use "Download All Masked Files" button below to get all files in a single zip archive.
                     </p>
                   </div>
                 )}
 
                 {/* Download All Button */}
-                <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'center' }}>
                   <button
                     className="btn-download btn-download-all"
                     onClick={handleDownloadAll}
                     disabled={zippingFiles}
                     title="Download all masked files as a zip archive"
                     style={{
-                      backgroundColor: '#007bff',
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                       color: 'white',
-                      padding: '12px 24px',
-                      fontSize: '16px',
+                      padding: '14px 32px',
+                      fontSize: '15px',
                       fontWeight: '600',
-                      borderRadius: '8px',
+                      borderRadius: '25px',
                       border: 'none',
                       cursor: zippingFiles ? 'not-allowed' : 'pointer',
                       transition: 'all 0.3s ease',
-                      boxShadow: '0 2px 4px rgba(0,123,255,0.3)',
-                      opacity: zippingFiles ? 0.7 : 1
+                      boxShadow: '0 4px 15px rgba(102, 126, 234, 0.4)',
+                      opacity: zippingFiles ? 0.7 : 1,
+                      whiteSpace: 'nowrap',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      width: 'auto'
                     }}
                     onMouseEnter={(e) => {
                       if (!zippingFiles) {
                         e.target.style.transform = 'translateY(-2px)';
-                        e.target.style.boxShadow = '0 4px 8px rgba(0,123,255,0.4)';
+                        e.target.style.boxShadow = '0 6px 20px rgba(102, 126, 234, 0.5)';
                       }
                     }}
                     onMouseLeave={(e) => {
                       e.target.style.transform = 'translateY(0)';
-                      e.target.style.boxShadow = '0 2px 4px rgba(0,123,255,0.3)';
+                      e.target.style.boxShadow = '0 4px 15px rgba(102, 126, 234, 0.4)';
                     }}
                   >
                     {zippingFiles ? (

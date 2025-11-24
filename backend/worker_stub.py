@@ -5,7 +5,7 @@ This module contains the actual processing logic that runs in parallel.
 import os
 import logging
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 import cv2
 import numpy as np
 from docx import Document
@@ -47,15 +47,16 @@ def _get_cached_ocr_engine():
         _ocr_engine_cache = get_ocr_engine()
     return _ocr_engine_cache
 
-def extract_text_from_file(file_path: str, file_type: str) -> Tuple[str, List[Tuple], int]:
+def extract_text_from_file(file_path: str, file_type: str) -> Tuple[str, List[Tuple], int, Optional[List[Dict[str, Any]]]]:
     """
     Extract text from a file.
-    Returns: (text, bboxes_list, page_count)
+    Returns: (text, bboxes_list, page_count, image_pii_matches)
     """
     ocr_engine = _get_cached_ocr_engine()
     text_parts = []
     all_bboxes = []
     page_count = 0
+    image_pii_matches: Optional[List[Dict[str, Any]]] = None
     
     if is_pdf_file(file_path):
         # OPTIMIZATION: Try text extraction first (much faster than OCR)
@@ -105,14 +106,66 @@ def extract_text_from_file(file_path: str, file_type: str) -> Tuple[str, List[Tu
             del image
     
     elif is_image_file(file_path):
-        # OCR image with optimized loading
-        image = cv2.imread(file_path, cv2.IMREAD_COLOR)
-        if image is not None:
-            text, bboxes = ocr_engine.extract_text(image)
-            text_parts.append(text)
-            all_bboxes = [(bbox, 0) for bbox in bboxes]
+        # Use NEW Image OCR Pipeline for images (PaddleOCR + Tesseract fallback)
+        try:
+            from image_ocr_pipeline import get_pipeline
+            from pii_detector import PIIDetector as PaddlePIIDetector
+            
+            # Initialize the image OCR pipeline
+            pii_detector_instance = PaddlePIIDetector()
+            pipeline = get_pipeline(pii_detector_instance)
+            
+            # Read image file as bytes
+            with open(file_path, 'rb') as img_file:
+                image_bytes = img_file.read()
+            
+            filename = os.path.basename(file_path)
+            
+            # Process image with the new pipeline
+            result = pipeline.process_single_image(image_bytes, filename)
+            
+            # Extract text and PIIs
+            text_parts.append(result.ocr_result.full_text)
+            
+            # Store detailed PII matches (with bounding boxes)
+            image_pii_matches = [match.to_dict() for match in result.pii_matches]
+            
+            # Convert PII matches to bboxes format (if available)
+            for pii_match in result.pii_matches:
+                if pii_match.bbox:
+                    # Convert to tuple format: (x, y, w, h)
+                    bbox_tuple = (
+                        pii_match.bbox['x'],
+                        pii_match.bbox['y'],
+                        pii_match.bbox['width'],
+                        pii_match.bbox['height']
+                    )
+                    all_bboxes.append((bbox_tuple, 0))
+            
             page_count = 1
-            del image  # Free memory
+            
+            logger.info(f"✅ Processed image {filename} with PaddleOCR pipeline: {result.total_piis} PIIs found")
+            
+        except ImportError as e:
+            # Fallback to old OCR engine if image_ocr_pipeline is not available
+            logger.warning(f"Image OCR pipeline not available, using fallback: {e}")
+            image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+            if image is not None:
+                text, bboxes = ocr_engine.extract_text(image)
+                text_parts.append(text)
+                all_bboxes = [(bbox, 0) for bbox in bboxes]
+                page_count = 1
+                del image  # Free memory
+        except Exception as e:
+            # Fallback to old OCR engine on any error
+            logger.error(f"Error processing image with new pipeline: {e}, using fallback")
+            image = cv2.imread(file_path, cv2.IMREAD_COLOR)
+            if image is not None:
+                text, bboxes = ocr_engine.extract_text(image)
+                text_parts.append(text)
+                all_bboxes = [(bbox, 0) for bbox in bboxes]
+                page_count = 1
+                del image  # Free memory
     
     elif is_docx_file(file_path):
         # Extract text from DOCX with optimized parsing
@@ -182,7 +235,7 @@ def extract_text_from_file(file_path: str, file_type: str) -> Tuple[str, List[Tu
             logger.error(f"Error reading text file: {e}", exc_info=True)
     
     full_text = "\n\n".join(text_parts)
-    return full_text, all_bboxes, page_count
+    return full_text, all_bboxes, page_count, image_pii_matches
 
 
 def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
@@ -204,7 +257,10 @@ def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
     
     try:
         # Extract text
-        text, bboxes_list, page_count = extract_text_from_file(filepath, file_info.get('file_type', ''))
+        text, bboxes_list, page_count, image_pii_matches = extract_text_from_file(
+            filepath,
+            file_info.get('file_type', '')
+        )
         
         # Reduce logging overhead for speed (only log if needed)
         if len(text) > 0:
@@ -230,41 +286,82 @@ def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
         # - PDF (.pdf), TXT (.txt), DOCX (.docx, .doc) → LABEL-BASED (explicit labels)
         # - CSV, Images, Others → ADVANCED detector (generic patterns)
         
-        if file_ext in ['.pdf', '.txt', '.docx', '.doc']:
-            selected_detector = label_based_detector
-            detector_name = "LABEL-BASED"
-            logger.info(f"Using LABEL-BASED detector for {filename} ({file_ext})")
-        elif file_ext == '.csv' or is_image_file(filename):
-            if ADVANCED_DETECTOR_AVAILABLE:
-                selected_detector = advanced_pii_detector
-                detector_name = "ADVANCED"
-                logger.info(f"Using ADVANCED detector for {filename} ({file_ext})")
+        # Use image pipeline PIIs if available
+        if image_pii_matches:
+            piis = image_pii_matches
+            logger.info(f"🖼️ Using {len(piis)} PIIs from image OCR pipeline for {filename}")
+        else:
+            if file_ext in ['.pdf', '.txt', '.docx', '.doc']:
+                selected_detector = label_based_detector
+                detector_name = "LABEL-BASED"
+                logger.info(f"Using LABEL-BASED detector for {filename} ({file_ext})")
+            elif file_ext == '.csv' or is_image_file(filename):
+                if ADVANCED_DETECTOR_AVAILABLE:
+                    selected_detector = advanced_pii_detector
+                    detector_name = "ADVANCED"
+                    logger.info(f"Using ADVANCED detector for {filename} ({file_ext})")
+                else:
+                    selected_detector = label_based_detector
+                    detector_name = "LABEL-BASED (fallback)"
+                    logger.warning(f"Advanced detector not available, using LABEL-BASED for {filename}")
             else:
                 selected_detector = label_based_detector
-                detector_name = "LABEL-BASED (fallback)"
-                logger.warning(f"Advanced detector not available, using LABEL-BASED for {filename}")
-        else:
-            selected_detector = label_based_detector
-            detector_name = "LABEL-BASED (default)"
-            logger.info(f"Using LABEL-BASED detector for {filename} ({file_ext})")
-        
-        # Fast PII detection (reduced logging for speed)
-        try:
-            logger.info(f"Detecting PIIs in {filename}, text length: {len(text)}, detector: {detector_name}")
-            piis = selected_detector.detect_pii(text, page_num=0)
+                detector_name = "LABEL-BASED (default)"
+                logger.info(f"Using LABEL-BASED detector for {filename} ({file_ext})")
             
-            # Ensure piis is a list
-            if not isinstance(piis, list):
-                logger.warning(f"PII detection returned non-list type: {type(piis)}, converting to list")
+            # Fast PII detection (reduced logging for speed)
+            try:
+                logger.info(f"Detecting PIIs in {filename}, text length: {len(text)}, detector: {detector_name}")
+                piis = selected_detector.detect_pii(text, page_num=0)
+                
+                # Ensure piis is a list
+                if not isinstance(piis, list):
+                    logger.warning(f"PII detection returned non-list type: {type(piis)}, converting to list")
+                    piis = []
+                
+                logger.info(f"✓ Detected {len(piis)} PIIs in {filename} using {detector_name}")
+                if len(piis) > 0:
+                    sample_types = [p.get('type', 'unknown') for p in piis[:5] if isinstance(p, dict)]
+                    logger.info(f"  Sample PII types: {sample_types}")
+            except Exception as e:
+                logger.error(f"✗ Error during PII detection for {filename}: {e}", exc_info=True)
                 piis = []
-            
-            logger.info(f"✓ Detected {len(piis)} PIIs in {filename} using {detector_name}")
-            if len(piis) > 0:
-                sample_types = [p.get('type', 'unknown') for p in piis[:5] if isinstance(p, dict)]
-                logger.info(f"  Sample PII types: {sample_types}")
-        except Exception as e:
-            logger.error(f"✗ Error during PII detection for {filename}: {e}", exc_info=True)
-            piis = []
+        
+        # Apply smart deduplication (for images especially)
+        if is_image_file(filename):
+            try:
+                # Use context-aware PII filtering for images
+                from context_aware_pii_filter import get_context_aware_filter
+                
+                context_filter = get_context_aware_filter()
+                
+                # Filter PIIs based on document context
+                filtered_piis, doc_type = context_filter.filter_by_context(piis, text)
+                
+                logger.info(f"📊 Context-aware filtering: {len(piis)} → {len(filtered_piis)} PIIs for {doc_type} document")
+                
+                # Use filtered list for display
+                piis = filtered_piis
+                
+            except ImportError as e:
+                logger.warning(f"Context-aware filter not available: {e}")
+                # Fallback to basic deduplication
+                try:
+                    from pii_deduplicator import smart_pii_deduplication
+                    
+                    display_piis, masking_piis = smart_pii_deduplication(
+                        piis,
+                        confidence_threshold=0.7,
+                        remove_substrings=True
+                    )
+                    
+                    logger.info(f"📊 Deduplication: {len(piis)} → {len(display_piis)} unique PIIs (keeping {len(masking_piis)} for masking)")
+                    piis = display_piis
+                    
+                except ImportError as e2:
+                    logger.warning(f"PII deduplicator not available: {e2}")
+            except Exception as e:
+                logger.error(f"Error during context-aware filtering: {e}")
         
         # Process and format PIIs properly
         for pii in piis:
@@ -291,14 +388,27 @@ def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
                 'end': int(pii.get('end', 0))
             }
             
-            # Try to find matching bbox
-            if bboxes_list and pii.get('start') is not None:
-                # Simplified: use first bbox if available
-                # Production should do proper text-to-bbox mapping
+            # CRITICAL FIX: Preserve bbox from original PII if it exists (for images)
+            if 'bbox' in pii and pii['bbox'] is not None:
+                # Image PIIs already have bbox from OCR pipeline - DON'T OVERWRITE
+                pii_result['bbox'] = pii['bbox']
+                logger.debug(f"   Preserved bbox from image OCR: {pii['bbox']}")
+            elif bboxes_list and pii.get('start') is not None:
+                # For non-image files, try to find matching bbox from text extraction
                 if len(bboxes_list) > 0:
                     bbox, page = bboxes_list[0]
                     pii_result['bbox'] = bbox
                     pii_result['page'] = page
+            
+            # Preserve additional metadata from context-aware filtering
+            if 'occurrence_count' in pii:
+                pii_result['occurrence_count'] = pii['occurrence_count']
+            if 'all_instances' in pii:
+                pii_result['all_instances'] = pii['all_instances']
+            if 'all_bboxes' in pii:
+                pii_result['all_bboxes'] = pii['all_bboxes']
+            if 'document_type' in pii:
+                pii_result['document_type'] = pii['document_type']
             
             all_piis.append(pii_result)
         
@@ -309,6 +419,23 @@ def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
             pass
         
         processing_time = time.time() - start_time
+        
+        # Determine which pipeline was used
+        pipeline_used = "UNKNOWN"
+        document_type = "GENERIC"
+        if is_image_file(filename):
+            pipeline_used = "image_ocr_pipeline (PaddleOCR + Tesseract)"
+            # Document type was determined during context-aware filtering
+            # Extract from piis metadata if available
+            if piis and len(piis) > 0:
+                first_pii = piis[0]
+                if 'document_type' in first_pii:
+                    document_type = first_pii['document_type']
+        elif file_ext in ['.pdf', '.txt', '.docx', '.doc']:
+            pipeline_used = "text_extraction + label_based_detector"
+        elif file_ext == '.csv':
+            pipeline_used = "pandas + advanced_detector" if ADVANCED_DETECTOR_AVAILABLE else "pandas + label_based_detector"
+        
         result = {
             'filename': filename,
             'success': True,
@@ -317,10 +444,13 @@ def process_file(file_info: Dict[str, Any]) -> Dict[str, Any]:
             'page_count': page_count,
             'text_length': len(text),
             'timestamp': get_timestamp(),
-            'processing_time': processing_time  # Add for ETA calculation
+            'processing_time': processing_time,  # Add for ETA calculation
+            'detector_used': detector_name,
+            'pipeline_used': pipeline_used,  # NEW: Pipeline information for browser console
+            'document_type': document_type  # NEW: Document type classification
         }
         
-        logger.info(f"✓ Processed {filename}: {len(all_piis)} PIIs detected, text length: {len(text)}, time: {processing_time:.2f}s")
+        logger.info(f"✓ Processed {filename}: {len(all_piis)} PIIs detected ({document_type}) using {pipeline_used}, time: {processing_time:.2f}s")
         if len(all_piis) > 0:
             logger.info(f"  PII types found: {list(set([p.get('type', 'unknown') for p in all_piis]))}")
         return result
