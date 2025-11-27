@@ -459,6 +459,130 @@
     margin-top: 60px;
 }
 
+/* Motion Showcase */
+.motion-showcase-section {
+    padding: 40px 0 10px;
+    background: linear-gradient(180deg, #f7fafc 0%, #edf2f7 100%);
+    opacity: 0;
+    transform: translateY(30px);
+    transition: all 0.8s ease;
+}
+
+.motion-showcase-section.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.motion-showcase {
+    /* Smaller base size to fit left column of the technical section */
+    --size: min(34vw, 360px);
+    --radius: calc(var(--size) * 0.36);
+    position: relative;
+    width: var(--size);
+    height: var(--size);
+    margin: 0 auto 10px;
+}
+
+.motion-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: calc(var(--size) * 0.22);
+    height: calc(var(--size) * 0.22);
+    border-radius: 50%;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(var(--size) * 0.1);
+    box-shadow: 0 12px 36px rgba(102, 126, 234, 0.4);
+    z-index: 3;
+}
+
+.motion-ring {
+    position: absolute;
+    inset: 0;
+    animation: spinSlow 48s linear infinite;
+}
+
+.motion-node {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(-1 * var(--radius)));
+}
+
+.motion-connection {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 2px;
+    height: var(--radius);
+    transform: translate(-50%, 0);
+    background: linear-gradient(180deg, transparent, rgba(102, 126, 234, 0.28), transparent);
+    animation: pulseOpacity 2s ease-in-out infinite;
+}
+
+.motion-icon {
+    position: absolute;
+    top: calc(-1 * var(--radius));
+    left: 0;
+    transform: translate(-50%, -50%);
+    width: calc(var(--size) * 0.16);
+    height: calc(var(--size) * 0.16);
+    border-radius: 50%;
+    background: #fff;
+    color: #667eea;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: calc(var(--size) * 0.07);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    animation: floatY 4s ease-in-out infinite;
+}
+
+.motion-icon:hover {
+    transform: translate(-50%, -50%) scale(1.05);
+    box-shadow: 0 12px 30px rgba(102, 126, 234, 0.28);
+}
+
+@keyframes floatY {
+
+    0%,
+    100% {
+        transform: translate(-50%, -50%);
+    }
+
+    50% {
+        transform: translate(-50%, calc(-50% - 8px));
+    }
+}
+
+@keyframes pulseOpacity {
+
+    0%,
+    100% {
+        opacity: 0.28;
+    }
+
+    50% {
+        opacity: 0.55;
+    }
+}
+
+@keyframes spinSlow {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
 /* Animated Features Grid Section */
 .animated-features-grid-section {
     padding: 100px 0;
@@ -1385,6 +1509,60 @@
     justify-content: center;
 }
 
+/* New Technical Showcase (animated chips) */
+.tech-showcase {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px;
+    align-items: center;
+    justify-items: center;
+    padding: 10px 0 20px;
+}
+
+.tech-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background:
+        linear-gradient(#ffffff, #ffffff) padding-box,
+        linear-gradient(135deg, #667eea, #764ba2) border-box;
+    color: #1f2937;
+    font-weight: 600;
+    box-shadow: 0 6px 18px rgba(102, 126, 234, 0.15);
+    animation: chipFloat 4s ease-in-out infinite;
+    will-change: transform;
+}
+
+.tech-chip svg {
+    color: #667eea;
+    width: 18px;
+    height: 18px;
+}
+
+.tech-chip:hover {
+    background:
+        linear-gradient(135deg, #667eea, #764ba2) padding-box,
+        linear-gradient(135deg, #667eea, #764ba2) border-box;
+    color: #ffffff;
+    transform: translateY(-2px);
+    box-shadow: 0 14px 36px rgba(102, 126, 234, 0.28);
+}
+
+@keyframes chipFloat {
+
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-6px);
+    }
+}
+
 .neural-network {
     position: relative;
     width: 100%;
@@ -1430,6 +1608,26 @@
     left: 50%;
     transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-180px);
     animation: nodeFloat 4s ease-in-out infinite;
+}
+
+.node-icon {
+    width: 60px;
+    height: 60px;
+    background: white;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: #667eea;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s ease;
+    z-index: 2;
+}
+
+.network-node:hover .node-icon {
+    transform: scale(1.1);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
 }
 
 .node-pulse {
@@ -1804,6 +2002,18 @@
         order: -1;
     }
 
+    .tech-showcase {
+        order: -1;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    /* Motion showcase scaling */
+    .motion-showcase {
+        --size: min(78vw, 380px);
+        --radius: calc(var(--size) * 0.28);
+        margin-bottom: 0;
+    }
+
     .features-grid,
     .security-grid,
     .usecases-grid {
@@ -1859,7 +2069,7 @@
     }
 
     .hero-title {
-        font-size: 36px;
+        font-size: 44px;
     }
 
     .hero-subtitle {
@@ -1883,6 +2093,65 @@
     .stats-section,
     .cta-section {
         padding: 60px 0;
+    }
+
+    /* Scale down animated background icons and neural graphic on mobile */
+    .background-icon {
+        font-size: 36px;
+    }
+
+    .technical-illustration {
+        height: 260px;
+    }
+
+    .neural-network {
+        transform: scale(0.8);
+        transform-origin: center;
+    }
+
+    .tech-showcase {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+    }
+
+    .tech-chip {
+        padding: 10px 14px;
+        font-size: 14px;
+    }
+
+    /* Motion showcase: mobile sizes */
+    .motion-showcase {
+        --size: min(86vw, 340px);
+        --radius: calc(var(--size) * 0.24);
+    }
+
+    .motion-icon {
+        width: calc(var(--size) * 0.18);
+        height: calc(var(--size) * 0.18);
+        font-size: calc(var(--size) * 0.075);
+    }
+
+    .motion-center {
+        width: calc(var(--size) * 0.24);
+        height: calc(var(--size) * 0.24);
+        font-size: calc(var(--size) * 0.11);
+    }
+
+    .network-center {
+        width: 90px;
+        height: 90px;
+        font-size: 44px;
+    }
+
+    .node-icon {
+        width: 48px;
+        height: 48px;
+        font-size: 20px;
+    }
+
+    .node-pulse {
+        width: 14px;
+        height: 14px;
     }
 
     .features-grid,
@@ -1968,6 +2237,65 @@
         padding: 0 8px;
     }
 
+    /* Further scale-down for the animated section */
+    .background-icon {
+        font-size: 28px;
+    }
+
+    .technical-illustration {
+        height: 220px;
+    }
+
+    .neural-network {
+        transform: scale(0.65);
+        transform-origin: center;
+    }
+
+    .tech-showcase {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+    }
+
+    .tech-chip {
+        padding: 9px 12px;
+        font-size: 13px;
+    }
+
+    /* Motion showcase small phones */
+    .motion-showcase {
+        --size: min(92vw, 310px);
+        --radius: calc(var(--size) * 0.22);
+    }
+
+    .motion-icon {
+        width: calc(var(--size) * 0.2);
+        height: calc(var(--size) * 0.2);
+        font-size: calc(var(--size) * 0.08);
+    }
+
+    .motion-center {
+        width: calc(var(--size) * 0.26);
+        height: calc(var(--size) * 0.26);
+        font-size: calc(var(--size) * 0.12);
+    }
+
+    .network-center {
+        width: 72px;
+        height: 72px;
+        font-size: 36px;
+    }
+
+    .node-icon {
+        width: 42px;
+        height: 42px;
+        font-size: 18px;
+    }
+
+    .node-pulse {
+        width: 10px;
+        height: 10px;
+    }
+
     .stats-row {
         grid-template-columns: repeat(2, 1fr);
         gap: 8px;
@@ -2005,6 +2333,12 @@
 
     .cta-subtitle {
         font-size: 18px;
+    }
+
+    /* Make hero headline larger on small phones */
+    .hero-title {
+        font-size: 40px;
+        line-height: 1.15;
     }
 
     .hero-buttons,

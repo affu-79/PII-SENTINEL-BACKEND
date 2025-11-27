@@ -256,6 +256,8 @@
   position: relative;
   width: 100%;
   height: 100%;
+  /* Base orbit radius for desktop; overridden in media queries */
+  --orbitRadius: 180px;
 }
 
 .network-center {
@@ -295,7 +297,7 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-180px);
+  transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(-1 * var(--orbitRadius)));
   animation: nodeFloat 4s ease-in-out infinite;
 }
 
@@ -323,7 +325,7 @@
   top: 50%;
   left: 50%;
   width: 2px;
-  height: 180px;
+  height: var(--orbitRadius);
   background: linear-gradient(180deg, transparent, rgba(102, 126, 234, 0.3), transparent);
   transform: translate(-50%, -100%);
   animation: connectionPulse 2s ease-in-out infinite;
@@ -333,11 +335,11 @@
 
   0%,
   100% {
-    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-180px);
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(-1 * var(--orbitRadius)));
   }
 
   50% {
-    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-200px);
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(calc(-1 * (var(--orbitRadius) + 20px)));
   }
 }
 
@@ -1536,8 +1538,31 @@
     height: 400px;
   }
 
+  /* Scale down the hero illustration network (tablet) */
+  .illustration-network {
+    --orbitRadius: 150px;
+  }
+
+  .network-center {
+    width: 110px;
+    height: 110px;
+    font-size: 52px;
+  }
+
+  .node-icon {
+    width: 56px;
+    height: 56px;
+    font-size: 18px;
+  }
+
   .industry-grid {
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+
+  /* Tablet: show stats in 2 columns */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
   }
 
   .workflow-timeline {
@@ -1617,6 +1642,31 @@
     font-size: 18px;
   }
 
+  /* Scale down the hero illustration network (mobile) */
+  .hero-illustration {
+    height: 380px;
+  }
+
+  .illustration-network {
+    --orbitRadius: 95px;
+  }
+
+  .network-center {
+    width: 90px;
+    height: 90px;
+    font-size: 44px;
+  }
+
+  .node-icon {
+    width: 48px;
+    height: 48px;
+    font-size: 16px;
+  }
+
+  .node-icon svg {
+    transform: scale(0.85);
+  }
+
   .section-title {
     font-size: 32px;
   }
@@ -1630,10 +1680,15 @@
   }
 
   .industry-grid,
-  .benefits-grid,
-  .stats-grid {
+  .benefits-grid {
     grid-template-columns: 1fr;
     gap: 24px;
+  }
+
+  /* Mobile: show stats in 2 columns */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
   }
 
   .cta-title {
@@ -1682,5 +1737,71 @@
 
   .role-card {
     padding: 32px 24px;
+  }
+}
+
+@media (max-width: 480px) {
+
+  /* Extra small phones: bring orbit even closer */
+  .hero-illustration {
+    height: 340px;
+  }
+
+  .illustration-network {
+    --orbitRadius: 80px;
+  }
+
+  .network-center {
+    width: 80px;
+    height: 80px;
+    font-size: 36px;
+  }
+
+  .node-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 14px;
+  }
+
+  .node-icon svg {
+    transform: scale(0.8);
+  }
+
+  /* Small phones: keep stats in 2 columns, tighter gaps */
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .stat-item {
+    padding: 20px 14px;
+  }
+}
+
+@media (max-width: 480px) {
+
+  /* Extra small phones: further reduce the illustration network */
+  .hero-illustration {
+    height: 300px;
+  }
+
+  .network-center {
+    width: 80px;
+    height: 80px;
+    font-size: 36px;
+  }
+
+  .network-node {
+    transform: translate(-50%, -50%) rotate(var(--angle)) translateY(-130px);
+  }
+
+  .node-connection {
+    height: 130px;
+  }
+
+  .node-icon {
+    width: 42px;
+    height: 42px;
+    font-size: 18px;
   }
 }

@@ -302,18 +302,21 @@ const Features = () => {
       >
         <div className="features-container">
           <div className="technical-content">
-            <div className="technical-illustration">
-              <div className="neural-network">
-                <div className="network-center">
-                  <FiCpu />
-                </div>
-                {[...Array(8)].map((_, i) => (
+            <div className="motion-showcase">
+              <div className="motion-center">
+                <FiCpu />
+              </div>
+              <div className="motion-ring">
+                {[FiShield, FiLock, FiDatabase, FiEye, FiGlobe, FiServer, FiCloud, FiTarget].map((Icon, i) => (
                   <div
                     key={i}
-                    className="network-node"
+                    className="motion-node"
                     style={{ '--angle': `${i * 45}deg` }}
                   >
-                    <div className="node-pulse"></div>
+                    <div className="motion-connection"></div>
+                    <div className="motion-icon">
+                      <Icon />
+                    </div>
                   </div>
                 ))}
               </div>

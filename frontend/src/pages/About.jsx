@@ -256,6 +256,17 @@ const About = () => {
 
   return (
     <div className="about-page">
+      {/* Back to Home Button */}
+      <a
+        href="/"
+        className="about-back-btn"
+        title="Back to Home"
+        aria-label="Back to Home"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M19 12H5M12 19l-7-7 7-7" />
+        </svg>
+      </a>
       <section className="about-hero">
         <div className="about-hero-decor orb-left" aria-hidden="true" />
         <div className="about-hero-decor orb-right" aria-hidden="true" />
@@ -267,7 +278,7 @@ const About = () => {
               </span>
               <h1 className="display-4 mb-3">{ABOUT_COPY.hero.headline}</h1>
               <p className="lead mb-4">{ABOUT_COPY.hero.subheadline}</p>
-              <div className="d-flex flex-wrap gap-3 mb-4">
+              <div className="d-flex flex-wrap gap-3 mb-4 justify-content-center justify-content-md-start">
                 <a href="/signup" className="btn hero-outline-btn" data-animate>
                   Get Started <FiArrowRight className="ms-2" />
                 </a>
@@ -426,7 +437,7 @@ const About = () => {
           </div>
           <div className="row g-4 justify-content-center">
             {ABOUT_COPY.pressLogos.map((logo) => (
-              <div className="col-6 col-md-3 col-lg-2" key={logo}>
+              <div className="col-12 col-lg-2 d-flex justify-content-center" key={logo}>
                 <div className="press-logo text-center fw-semibold animated-element" data-animate>{logo}</div>
               </div>
             ))}

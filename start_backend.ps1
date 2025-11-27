@@ -38,6 +38,25 @@ if (Test-Path ".env") {
     }
 }
 
+# Google OAuth envs (read from .env or existing environment)
+if (-not $env:GOOGLE_CLIENT_ID) {
+    Write-Host "WARNING: GOOGLE_CLIENT_ID is not set. Please add GOOGLE_CLIENT_ID to backend/.env" -ForegroundColor Yellow
+} else {
+    Write-Host "Using GOOGLE_CLIENT_ID=[configured]" -ForegroundColor Gray
+}
+
+if (-not $env:GOOGLE_CLIENT_SECRET) {
+    Write-Host "WARNING: GOOGLE_CLIENT_SECRET is not set. Please add GOOGLE_CLIENT_SECRET to backend/.env" -ForegroundColor Yellow
+} else {
+    Write-Host "Using GOOGLE_CLIENT_SECRET=[configured]" -ForegroundColor Gray
+}
+
+# Ensure redirect URI is set for code exchange
+if (-not $env:GOOGLE_REDIRECT_URI) {
+    $env:GOOGLE_REDIRECT_URI = "postmessage"
+}
+Write-Host "Using GOOGLE_REDIRECT_URI=$env:GOOGLE_REDIRECT_URI" -ForegroundColor Gray
+
 # Check if venv exists
 $venvPython = Join-Path $backendDir "venv\Scripts\python.exe"
 if (-not (Test-Path $venvPython)) {

@@ -15,6 +15,7 @@ const HowItWorks = () => {
   const navigate = useNavigate();
   const [visibleSections, setVisibleSections] = useState(new Set());
   const [activeStep, setActiveStep] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window !== 'undefined' ? window.innerWidth : 1920));
   const sectionRefs = useRef({});
 
   useEffect(() => {
@@ -47,6 +48,30 @@ const HowItWorks = () => {
       });
     };
   }, []);
+
+  // Watch viewport for responsive flow layout
+  useEffect(() => {
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const isTabletOrMobile = viewportWidth <= 1024;
+
+  const renderFlowNode = (node, index) => (
+    <React.Fragment key={`node-${index}`}>
+      <div className="flow-node" style={{ animationDelay: `${index * 0.1}s` }}>
+        <div className="node-glow" style={{ background: `radial-gradient(circle, ${node.color}40, transparent)` }}></div>
+        <div className="node-icon-wrapper" style={{ background: `linear-gradient(135deg, ${node.color}20, ${node.color}10)` }}>
+          <div className="node-icon" style={{ color: node.color }}>
+            {node.icon}
+          </div>
+        </div>
+        <div className="node-label">{node.label}</div>
+        <div className="node-pulse-ring" style={{ borderColor: node.color }}></div>
+      </div>
+    </React.Fragment>
+  );
 
   const animateMetrics = () => {
     const metrics = [
@@ -644,31 +669,56 @@ Email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}/`}
               with each stage optimized for speed and accuracy.
             </p>
           </div>
-          <div className="flow-diagram">
-            {flowNodes.map((node, index) => (
-              <React.Fragment key={index}>
-                <div className="flow-node" style={{ animationDelay: `${index * 0.1}s` }}>
-                  <div className="node-glow" style={{ background: `radial-gradient(circle, ${node.color}40, transparent)` }}></div>
-                  <div className="node-icon-wrapper" style={{ background: `linear-gradient(135deg, ${node.color}20, ${node.color}10)` }}>
-                    <div className="node-icon" style={{ color: node.color }}>
-                      {node.icon}
+          {!isTabletOrMobile && (
+            <div className="flow-diagram">
+              {flowNodes.map((node, index) => (
+                <React.Fragment key={index}>
+                  {renderFlowNode(node, index)}
+                  {index < flowNodes.length - 1 && (
+                    <div className="flow-connector">
+                      <div className="connector-line" style={{ background: `linear-gradient(90deg, ${node.color}, ${flowNodes[index + 1].color})` }}></div>
+                      <div className="connector-arrow">
+                        <FiArrowRight />
+                      </div>
+                      <div className="connector-pulse"></div>
                     </div>
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          )}
+
+          {isTabletOrMobile && (
+            <div className="flow-grid">
+              {[0, 2, 4].map((startIdx, row) => {
+                const a = flowNodes[startIdx];
+                const b = flowNodes[startIdx + 1];
+                const ltr = row % 2 === 0;
+                return (
+                  <div key={`row-${row}`} className={`flow-row ${ltr ? 'ltr' : 'rtl'}`}>
+                    {ltr ? (
+                      <>
+                        {renderFlowNode(a, startIdx)}
+                        <div className="flow-arrow-h"><FiArrowRight /></div>
+                        {renderFlowNode(b, startIdx + 1)}
+                      </>
+                    ) : (
+                      <>
+                        {renderFlowNode(b, startIdx + 1)}
+                        <div className="flow-arrow-h rtl"><FiArrowLeft /></div>
+                        {renderFlowNode(a, startIdx)}
+                      </>
+                    )}
+                    {row < 2 && (
+                      <div className="flow-arrow-down">
+                        <FiArrowDown />
+                      </div>
+                    )}
                   </div>
-                  <div className="node-label">{node.label}</div>
-                  <div className="node-pulse-ring" style={{ borderColor: node.color }}></div>
-                </div>
-                {index < flowNodes.length - 1 && (
-                  <div className="flow-connector">
-                    <div className="connector-line" style={{ background: `linear-gradient(90deg, ${node.color}, ${flowNodes[index + 1].color})` }}></div>
-                    <div className="connector-arrow">
-                      <FiArrowRight />
-                    </div>
-                    <div className="connector-pulse"></div>
-                  </div>
-                )}
-              </React.Fragment>
-            ))}
-          </div>
+                );
+              })}
+            </div>
+          )}
           <div className="flow-cta">
             <p className="flow-cta-text">Want to explore this pipeline in action?</p>
             <div className="flow-cta-buttons">
