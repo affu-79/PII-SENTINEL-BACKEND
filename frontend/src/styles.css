@@ -616,9 +616,10 @@ body {
   background-color: white;
   padding: 8px 16px;
   border-radius: 6px;
-  min-width: 150px;
+  min-width: auto;
   text-align: center;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  white-space: nowrap;
 }
 
 .empty-state {
@@ -1597,9 +1598,10 @@ body {
   }
 
   .pagination-info {
-    min-width: 130px;
+    min-width: auto;
     font-size: 12px;
     padding: 6px 12px;
+    white-space: nowrap;
   }
 
   .pii-table-section {
@@ -1901,8 +1903,15 @@ body {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.7;
+  }
 }
 
 .filter-hint {

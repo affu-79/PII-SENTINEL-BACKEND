@@ -1430,21 +1430,23 @@ function AnalysisBoard({ analysis, batchId, tokenAccount, featuresEnabled = {}, 
           </table>
           {/* Pagination Controls */}
           {totalPages > 1 && (
-            <div className="pagination-controls">
+            <div className="custom-pagination-container">
               <button
                 onClick={handlePrevPage}
                 disabled={currentPage === 1}
-                className="pagination-button"
+                className="custom-page-btn"
               >
                 &larr; Previous
               </button>
-              <span className="pagination-info">
+
+              <div className="custom-page-info">
                 Page {currentPage} of {totalPages}
-              </span>
+              </div>
+
               <button
                 onClick={handleNextPage}
                 disabled={currentPage === totalPages}
-                className="pagination-button"
+                className="custom-page-btn"
               >
                 Next &rarr;
               </button>
